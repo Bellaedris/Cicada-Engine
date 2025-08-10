@@ -1,11 +1,17 @@
 cmake_minimum_required(VERSION 3.27)
 project(CicadaEngine)
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS ON)
 
 set(PROJECTS Cicada)
+
+# add any extra CMake files
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/CMake")
+
+# Enable C++ module dependency scanning
+set(CMAKE_CXX_SCAN_FOR_MODULES ON)
 
 # ------------ GTest configuration ------------
 # Fetch and download Gtest if necessary
@@ -34,14 +40,42 @@ gtest_discover_tests(CicadaTests)
 # made with Cicada
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 
-include_directories(${CMAKE_SOURCE_DIR}/Include)
-link_directories(${CMAKE_SOURCE_DIR}/Libraries)
-
 # Find all libraries. Platform dependant, let's try to keep this up and running on Windows/Linux at least
-find_package(Vulkan REQUIRED)
+find_package (glfw3 REQUIRED)
+find_package (glm REQUIRED)
+find_package (Vulkan REQUIRED)
+find_package (tinyobjloader REQUIRED)
+find_package (KTX REQUIRED)
+
+# set up Vulkan C++ module
+add_library(VulkanCppModule)
+add_library(Vulkan::cppm ALIAS VulkanCppModule)
+
+target_compile_definitions(VulkanCppModule PUBLIC
+        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
+        VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
+)
+target_include_directories(VulkanCppModule
+        PRIVATE
+        "${Vulkan_INCLUDE_DIR}"
+)
+target_link_libraries(VulkanCppModule
+        PUBLIC
+        Vulkan::Vulkan
+)
+
+set_target_properties(VulkanCppModule PROPERTIES CXX_STANDARD 20)
+
+target_sources(VulkanCppModule
+        PUBLIC
+        FILE_SET cxx_modules TYPE CXX_MODULES
+        BASE_DIRS
+        "${Vulkan_INCLUDE_DIR}"
+        FILES
+        "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
+)
 
 if(WIN32)
-    SET(LIBRARIES Vulkan::Vulkan glfw3)
     #add_definitions(-D_CRT_SECURE_NO_WARNINGS) # i've seen this in the learnOpenGL CMakeList, try to decomment it if a warning appears on a regular basis
 elseif(UNIX AND NOT APPLE)
     #FIXME by someone that has a linux system in its immediate proximity
@@ -57,4 +91,4 @@ file(GLOB_RECURSE SOURCES
 add_executable(CicadaEngine ${SOURCES})
 target_link_libraries(CicadaEngine ${LIBRARIES})
 
-target_link_libraries(CicadaEngine Vulkan::Vulkan glfw3)
+target_link_libraries(CicadaEngine Vulkan::cppm glfw)
