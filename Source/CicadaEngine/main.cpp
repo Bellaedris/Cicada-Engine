@@ -9,6 +9,7 @@
 
 #include <vector>
 #include <algorithm>
+#include <map>
 
 #pragma region Constants
 constexpr uint32_t WIDTH = 800;
@@ -18,6 +19,13 @@ const std::vector<const char*> validationLayers
         {
             "VK_LAYER_KHRONOS_validation",
         };
+
+const std::vector<const char*> mandatoryDeviceExtensions = {
+    vk::KHRSwapchainExtensionName,
+    vk::KHRSpirv14ExtensionName,
+    vk::KHRSynchronization2ExtensionName,
+    vk::KHRCreateRenderpass2ExtensionName
+};
 
 #ifdef NDEBUG
 constexpr bool enableValidationLayers = false;
@@ -45,6 +53,9 @@ private:
     vk::raii::Context m_context; // the context is automatically created by the raii constructor
     vk::raii::Instance m_instance {nullptr};
     vk::raii::DebugUtilsMessengerEXT debugMessenger {nullptr};
+    vk::raii::PhysicalDevice m_physicalDevice {nullptr};
+    vk::raii::Device m_device {nullptr};
+    vk::raii::Queue m_graphicsQueue {nullptr};
     #pragma endregion Members
 
     #pragma region Methods
@@ -153,6 +164,119 @@ private:
 
         return extensions;
     }
+
+    void PickPhysicalDevice()
+    {
+        std::vector<vk::raii::PhysicalDevice> devices = m_instance.enumeratePhysicalDevices();
+
+        if (devices.empty())
+            throw std::runtime_error("Couldn't find a GPU with Vulkan support.");
+
+        std::multimap<int, vk::raii::PhysicalDevice> devicesScores;
+        for (const auto& device : devices)
+        {
+            // we want our devices to handle graphics queue families, a few mandatory extensions and
+            // maximize a score
+            std::vector<vk::QueueFamilyProperties> queueFamilies = device.getQueueFamilyProperties();
+
+            bool hasMinimalCapabilities = true;
+            // check that we handle graphics queues
+            const auto queueFamilyPropertiesIter = std::ranges::find_if(queueFamilies, [](vk::QueueFamilyProperties const &qfp)
+            {
+                return (qfp.queueFlags & vk::QueueFlagBits::eGraphics) != static_cast<vk::QueueFlags>(0);
+            });
+            if (queueFamilyPropertiesIter == queueFamilies.end())
+            {
+                hasMinimalCapabilities = false;
+            }
+
+            // check that we handle mandatory graphics extensions
+            std::vector<vk::ExtensionProperties> extensionProperties = device.enumerateDeviceExtensionProperties();
+            bool hasAllExtensions = true;
+            for (const auto& extension : mandatoryDeviceExtensions)
+            {
+                auto foundProperty = std::ranges::find_if(extensionProperties, [extension](auto const & ext)
+                {
+                   return strcmp(ext.extensionName, extension) == 0;
+                });
+                hasAllExtensions = hasAllExtensions && foundProperty != extensionProperties.end();
+            }
+            if (!hasAllExtensions)
+            {
+                hasMinimalCapabilities = false;
+            }
+
+            if (!hasMinimalCapabilities)
+            {
+                devicesScores.insert({0, device});
+                continue;
+            }
+
+            // compute a device score
+            vk::PhysicalDeviceProperties properties = device.getProperties();
+            vk::PhysicalDeviceFeatures features = device.getFeatures();
+
+            uint32_t score = 0;
+            if (properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
+            {
+                score += 1000;
+            }
+
+            score += properties.limits.maxImageDimension2D;
+            devicesScores.insert({score, device});
+        }
+
+        if (devicesScores.rbegin()->first > 0)
+        {
+            m_physicalDevice = vk::raii::PhysicalDevice(devicesScores.rbegin()->second);
+            std::cout << "selected device: " << m_physicalDevice.getProperties().deviceName << std::endl;
+        }
+        else
+            throw std::runtime_error("Couldn't find a suitable device");
+    }
+
+    void CreateLogicalDevice()
+    {
+        std::vector<vk::QueueFamilyProperties> queueFamilyProperties = m_physicalDevice.getQueueFamilyProperties();
+
+        // get the first index into queueFamilyProperties which supports graphics
+        auto graphicsQueueFamilyProperty = std::ranges::find_if( queueFamilyProperties, []( auto const & qfp )
+                        { return (qfp.queueFlags & vk::QueueFlagBits::eGraphics) != static_cast<vk::QueueFlags>(0); } );
+        if (graphicsQueueFamilyProperty == queueFamilyProperties.end())
+        {
+            throw std::runtime_error("Couldn't find a graphics queue.");
+        }
+
+        auto graphicsIndex = static_cast<uint32_t>( std::distance( queueFamilyProperties.begin(), graphicsQueueFamilyProperty ) );
+
+        float queuePriority = 0.f;
+        vk::DeviceQueueCreateInfo queueCreateInfo =
+        {
+            .queueFamilyIndex = graphicsIndex,
+            .queueCount = 1,
+            .pQueuePriorities = &queuePriority,
+        };
+
+        vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain =
+        {
+            {},                               // no feature from physicalDeviceFeature2
+            { .dynamicRendering = true },     // enable Vulkan13 dynamic rendering
+            { .extendedDynamicState = true, } // enable extendedDynamicState from extension
+        };
+
+        vk::DeviceCreateInfo deviceCreateInfo =
+        {
+            .pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
+            .queueCreateInfoCount =  1,
+            .pQueueCreateInfos = &queueCreateInfo,
+            .enabledExtensionCount = static_cast<uint32_t>(mandatoryDeviceExtensions.size()),
+            .ppEnabledExtensionNames = mandatoryDeviceExtensions.data()
+        };
+
+        m_device = vk::raii::Device(m_physicalDevice, deviceCreateInfo);
+
+        m_graphicsQueue = vk::raii::Queue(m_device, graphicsIndex, 0);
+    }
     #pragma endregion Methods
 
     #pragma region Lifecycle
@@ -170,6 +294,8 @@ private:
     {
         CreateInstance();
         SetupDebugMessenger();
+        PickPhysicalDevice();
+        CreateLogicalDevice();
     }
 
     void MainLoop()
