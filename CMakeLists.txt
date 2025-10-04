@@ -10,9 +10,6 @@ set(PROJECTS Cicada)
 # add any extra CMake files
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/CMake")
 
-# Enable C++ module dependency scanning
-set(CMAKE_CXX_SCAN_FOR_MODULES ON)
-
 # ------------ GTest configuration ------------
 # Fetch and download Gtest if necessary
 include(FetchContent)
@@ -45,35 +42,7 @@ find_package (glfw3 REQUIRED)
 find_package (glm REQUIRED)
 find_package (Vulkan REQUIRED)
 find_package (tinyobjloader REQUIRED)
-find_package (KTX REQUIRED)
-
-# set up Vulkan C++ module
-add_library(VulkanCppModule)
-add_library(Vulkan::cppm ALIAS VulkanCppModule)
-
-target_compile_definitions(VulkanCppModule PUBLIC
-        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
-        VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
-)
-target_include_directories(VulkanCppModule
-        PRIVATE
-        "${Vulkan_INCLUDE_DIR}"
-)
-target_link_libraries(VulkanCppModule
-        PUBLIC
-        Vulkan::Vulkan
-)
-
-set_target_properties(VulkanCppModule PROPERTIES CXX_STANDARD 20)
-
-target_sources(VulkanCppModule
-        PUBLIC
-        FILE_SET cxx_modules TYPE CXX_MODULES
-        BASE_DIRS
-        "${Vulkan_INCLUDE_DIR}"
-        FILES
-        "${Vulkan_INCLUDE_DIR}/vulkan/vulkan.cppm"
-)
+#find_package (KTX REQUIRED)
 
 if(WIN32)
     #add_definitions(-D_CRT_SECURE_NO_WARNINGS) # i've seen this in the learnOpenGL CMakeList, try to decomment it if a warning appears on a regular basis
@@ -91,4 +60,9 @@ file(GLOB_RECURSE SOURCES
 add_executable(CicadaEngine ${SOURCES})
 target_link_libraries(CicadaEngine ${LIBRARIES})
 
-target_link_libraries(CicadaEngine Vulkan::cppm glfw)
+target_compile_definitions(CicadaEngine PUBLIC
+        VULKAN_HPP_DISPATCH_LOADER_DYNAMIC=1
+        VULKAN_HPP_NO_STRUCT_CONSTRUCTORS=1
+)
+
+target_link_libraries(CicadaEngine glfw)
