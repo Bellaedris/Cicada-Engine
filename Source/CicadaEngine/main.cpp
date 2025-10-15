@@ -59,6 +59,7 @@ private:
     vk::raii::Device m_device {nullptr};
     vk::raii::Queue m_graphicsQueue {nullptr};
     vk::raii::Queue m_presentQueue {nullptr};
+    int m_graphicsQueueIndex {-1};
     vk::raii::SwapchainKHR m_swapChain {nullptr};
     std::vector<vk::Image> m_swapChainImages;
     vk::Format m_swapChainImageFormat{vk::Format::eUndefined};
@@ -66,6 +67,9 @@ private:
     std::vector<vk::raii::ImageView> m_swapChainImageViews;
     vk::raii::PipelineLayout m_pipelineLayout {nullptr};
     vk::raii::Pipeline m_pipeline {nullptr};
+
+    vk::raii::CommandPool m_commandPool {nullptr};
+    vk::raii::CommandBuffer m_commandBuffer {nullptr};
     #pragma endregion Members
 
     #pragma region Methods
@@ -310,6 +314,7 @@ private:
 
         m_graphicsQueue = vk::raii::Queue(m_device, graphicsIndex, 0);
         m_presentQueue = vk::raii::Queue(m_device, graphicsIndex, 0);
+        m_graphicsQueueIndex = graphicsIndex;
     }
 
     void CreateSurface()
@@ -550,6 +555,119 @@ private:
 
         return {m_device, shaderModuleCreateInfo};
     }
+
+    void CreateCommandPool()
+    {
+        vk::CommandPoolCreateInfo commandPoolCreateInfo
+        {
+            .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+            .queueFamilyIndex = static_cast<uint32_t>(m_graphicsQueueIndex),
+        };
+
+        m_commandPool = vk::raii::CommandPool(m_device, commandPoolCreateInfo);
+    }
+
+    void CreateCommandBuffer()
+    {
+        vk::CommandBufferAllocateInfo commandBufferAllocateInfo
+        {
+            .commandBufferCount = 1,
+            .commandPool = m_commandPool,
+            .level = vk::CommandBufferLevel::ePrimary,
+        };
+
+        m_commandBuffer = std::move(vk::raii::CommandBuffers(m_device, commandBufferAllocateInfo).front());
+    }
+
+    void RecordCommandBuffer(uint32_t swapChainImageIndex)
+    {
+        m_commandBuffer.begin({}); // we can pass flags here, see vk::CommandBufferUsageFlagBits
+
+        TransitionImageLayout(
+            swapChainImageIndex,
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eColorAttachmentOptimal,
+            {},
+            vk::AccessFlagBits2::eColorAttachmentWrite,
+            vk::PipelineStageFlagBits2::eTopOfPipe,
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput
+        );
+
+        vk::ClearValue clearColor = vk::ClearColorValue({.0f, .0f, .0f, 1.f});
+        vk::RenderingAttachmentInfo attachmentInfos
+        {
+            .imageView = m_swapChainImageViews[swapChainImageIndex],
+            .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+            .loadOp = vk::AttachmentLoadOp::eClear,
+            .storeOp = vk::AttachmentStoreOp::eStore,
+            .clearValue = clearColor
+        };
+
+        vk::RenderingInfo renderingInfo
+        {
+            .renderArea = { {0, 0}, m_swapChainExtent},
+            .layerCount = 1,
+            .colorAttachmentCount = 1,
+            .pColorAttachments = &attachmentInfos
+        };
+
+        m_commandBuffer.beginRendering(renderingInfo);
+
+        m_commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
+        m_commandBuffer.setViewport(0, vk::Viewport(.0f, .0f, static_cast<float>(m_swapChainExtent.width), static_cast<float>(m_swapChainExtent.height), .0f, 1.f));
+        m_commandBuffer.setScissor(0, vk::Rect2D({0, 0}, m_swapChainExtent));
+
+        m_commandBuffer.draw(3, 1, 0, 0);
+        m_commandBuffer.endRendering();
+
+        // After rendering, transition the swapchain image to PRESENT_SRC
+        TransitionImageLayout(
+            swapChainImageIndex,
+            vk::ImageLayout::eColorAttachmentOptimal,
+            vk::ImageLayout::ePresentSrcKHR,
+            vk::AccessFlagBits2::eColorAttachmentWrite,                 // srcAccessMask
+            {},                                                      // dstAccessMask
+            vk::PipelineStageFlagBits2::eColorAttachmentOutput,        // srcStage
+            vk::PipelineStageFlagBits2::eBottomOfPipe                  // dstStage
+        );
+        m_commandBuffer.end();
+    }
+
+    void TransitionImageLayout(
+        uint32_t imageIndex,
+        vk::ImageLayout oldLayout,
+        vk::ImageLayout newLayout,
+        vk::AccessFlags2 srcAccessMask,
+        vk::AccessFlags2 dstAccessMask,
+        vk::PipelineStageFlags2 srcStageMask,
+        vk::PipelineStageFlags2 dstStageMask
+    )
+    {
+        vk::ImageMemoryBarrier2 barrier = {
+            .srcStageMask = srcStageMask,
+            .srcAccessMask = srcAccessMask,
+            .dstStageMask = dstStageMask,
+            .dstAccessMask = dstAccessMask,
+            .oldLayout = oldLayout,
+            .newLayout = newLayout,
+            .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
+            .image = m_swapChainImages[imageIndex],
+            .subresourceRange = {
+                .aspectMask = vk::ImageAspectFlagBits::eColor,
+                .baseMipLevel = 0,
+                .levelCount = 1,
+                .baseArrayLayer = 0,
+                .layerCount = 1
+            }
+        };
+        vk::DependencyInfo dependencyInfo = {
+            .dependencyFlags = {},
+            .imageMemoryBarrierCount = 1,
+            .pImageMemoryBarriers = &barrier
+        };
+        m_commandBuffer.pipelineBarrier2(dependencyInfo);
+    }
     #pragma endregion Methods
 
     #pragma region Lifecycle
@@ -573,6 +691,8 @@ private:
         CreateSwapChain();
         CreateImageViews();
         CreateGraphicsPipeline();
+        CreateCommandPool();
+        CreateCommandBuffer();
     }
 
     void MainLoop()
