@@ -70,6 +70,10 @@ private:
 
     vk::raii::CommandPool m_commandPool {nullptr};
     vk::raii::CommandBuffer m_commandBuffer {nullptr};
+
+    vk::raii::Semaphore m_presentCompleteSemaphore {nullptr};
+    vk::raii::Semaphore m_renderFinishedSemaphore {nullptr};
+    vk::raii::Fence m_frameFence {nullptr};
     #pragma endregion Members
 
     #pragma region Methods
@@ -297,7 +301,7 @@ private:
         vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain =
         {
             {},                               // no feature from physicalDeviceFeature2
-            { .dynamicRendering = true },     // enable Vulkan13 dynamic rendering
+            { .synchronization2 = true, .dynamicRendering = true },     // enable Vulkan13 dynamic rendering
             { .extendedDynamicState = true, } // enable extendedDynamicState from extension
         };
 
@@ -496,8 +500,8 @@ private:
 
         vk::PipelineColorBlendAttachmentState colorBlendAttachment
         {
-            .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
             .blendEnable = vk::False,
+            .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
         };
 
         vk::PipelineColorBlendStateCreateInfo colorBlending
@@ -532,8 +536,8 @@ private:
             .pRasterizationState = &rasterizationStateInfo,
             .pMultisampleState = &multisampleStateCreateInfo,
             .pColorBlendState = &colorBlending,
-            .layout = m_pipelineLayout,
             .pDynamicState = &dynamicState,
+            .layout = m_pipelineLayout,
             .renderPass = nullptr, // no render passes, we're using Dynamic rendering from Vk 1.3
 
             // infos for pipeline derivation. This is useless as long as we do not set the flag below
@@ -571,9 +575,9 @@ private:
     {
         vk::CommandBufferAllocateInfo commandBufferAllocateInfo
         {
-            .commandBufferCount = 1,
             .commandPool = m_commandPool,
             .level = vk::CommandBufferLevel::ePrimary,
+            .commandBufferCount = 1,
         };
 
         m_commandBuffer = std::move(vk::raii::CommandBuffers(m_device, commandBufferAllocateInfo).front());
@@ -593,7 +597,7 @@ private:
             vk::PipelineStageFlagBits2::eColorAttachmentOutput
         );
 
-        vk::ClearValue clearColor = vk::ClearColorValue({.0f, .0f, .0f, 1.f});
+        vk::ClearValue clearColor = vk::ClearColorValue(.0f, .0f, .0f, 1.f);
         vk::RenderingAttachmentInfo attachmentInfos
         {
             .imageView = m_swapChainImageViews[swapChainImageIndex],
@@ -605,7 +609,7 @@ private:
 
         vk::RenderingInfo renderingInfo
         {
-            .renderArea = { {0, 0}, m_swapChainExtent},
+            .renderArea = { .offset = {0, 0}, .extent = m_swapChainExtent},
             .layerCount = 1,
             .colorAttachmentCount = 1,
             .pColorAttachments = &attachmentInfos
@@ -668,6 +672,63 @@ private:
         };
         m_commandBuffer.pipelineBarrier2(dependencyInfo);
     }
+
+    void CreateSyncObjects()
+    {
+        m_presentCompleteSemaphore = vk::raii::Semaphore(m_device, vk::SemaphoreCreateInfo());
+        m_renderFinishedSemaphore = vk::raii::Semaphore(m_device, vk::SemaphoreCreateInfo());
+        m_frameFence = vk::raii::Fence(m_device, {.flags = vk::FenceCreateFlagBits::eSignaled});
+    }
+
+    void DrawFrame()
+    {
+        m_graphicsQueue.waitIdle();
+
+        auto [result, imageIndex] = m_swapChain.acquireNextImage(
+            std::numeric_limits<uint64_t>::max(),
+            *m_presentCompleteSemaphore,
+            nullptr
+        );
+        RecordCommandBuffer(imageIndex);
+
+        m_device.resetFences(*m_frameFence);
+        vk::PipelineStageFlags waitDestinationStageFlags(vk::PipelineStageFlagBits::eColorAttachmentOutput);
+        const vk::SubmitInfo submitInfo
+        {
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &*m_presentCompleteSemaphore,
+            .pWaitDstStageMask = &waitDestinationStageFlags,
+            .commandBufferCount = 1,
+            .pCommandBuffers = &*m_commandBuffer,
+            .signalSemaphoreCount = 1,
+            .pSignalSemaphores = &*m_renderFinishedSemaphore
+        };
+
+        m_graphicsQueue.submit(submitInfo, *m_frameFence);
+        // wait for the frame to be finished before doing anything else, we don't want to begin asking for more swapchain
+        // images while rendering is still ongoing
+        while (m_device.waitForFences(*m_frameFence, vk::True, 1.f) == vk::Result::eTimeout)
+        {
+
+        }
+
+        const vk::PresentInfoKHR presentInfo
+        {
+            .waitSemaphoreCount = 1,
+            .pWaitSemaphores = &*m_renderFinishedSemaphore,
+            .swapchainCount = 1,
+            .pSwapchains = &*m_swapChain,
+            .pImageIndices = &imageIndex
+        };
+
+        switch (m_graphicsQueue.presentKHR(presentInfo))
+        {
+            case vk::Result::eSuccess:
+                break;
+            default:
+                break;
+        }
+    }
     #pragma endregion Methods
 
     #pragma region Lifecycle
@@ -693,6 +754,7 @@ private:
         CreateGraphicsPipeline();
         CreateCommandPool();
         CreateCommandBuffer();
+        CreateSyncObjects();
     }
 
     void MainLoop()
@@ -700,7 +762,11 @@ private:
         while(!glfwWindowShouldClose(m_window))
         {
             glfwPollEvents();
+            DrawFrame();
         }
+
+        // wait for any async operation to finish
+        m_device.waitIdle();
     }
 
     void Cleanup()
