@@ -9,6 +9,7 @@
 
 #include <vector>
 #include <algorithm>
+#include <fstream>
 #include <map>
 
 #pragma region Constants
@@ -62,6 +63,9 @@ private:
     std::vector<vk::Image> m_swapChainImages;
     vk::Format m_swapChainImageFormat{vk::Format::eUndefined};
     vk::Extent2D m_swapChainExtent;
+    std::vector<vk::raii::ImageView> m_swapChainImageViews;
+    vk::raii::PipelineLayout m_pipelineLayout {nullptr};
+    vk::raii::Pipeline m_pipeline {nullptr};
     #pragma endregion Members
 
     #pragma region Methods
@@ -74,6 +78,21 @@ private:
         std::cerr << "validation layer: type " << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
 
         return vk::False;
+    }
+
+    static std::vector<char> ReadFile(const std::string& fileName)
+    {
+        std::ifstream file(fileName, std::ios::binary | std::ios::ate);
+
+        if (file.is_open() == false)
+            throw std::runtime_error("failed to open file " + fileName);
+
+        std::vector<char> buffer(file.tellg());
+        file.seekg(0, std::ios::beg);
+        file.read(buffer.data(), static_cast<std::streamsize>(buffer.size()));
+
+        file.close();
+        return buffer;
     }
     #pragma endregion Statics
 
@@ -380,6 +399,157 @@ private:
         m_swapChain = vk::raii::SwapchainKHR(m_device, swapchainCreateInfo);
         m_swapChainImages = m_swapChain.getImages();
     }
+
+    void CreateImageViews()
+    {
+        m_swapChainImageViews.clear();
+
+        constexpr vk::ImageSubresourceRange subresourceRange
+        {
+            .aspectMask = vk::ImageAspectFlagBits::eColor,
+            .baseMipLevel = 0,
+            .levelCount = 1,
+            .baseArrayLayer = 0,
+            .layerCount = 1,
+        };
+
+        vk::ImageViewCreateInfo imageViewCreateInfo
+        {
+            .viewType = vk::ImageViewType::e2D,
+            .format = m_swapChainImageFormat,
+            .subresourceRange = subresourceRange
+        };
+
+        for (const auto& image : m_swapChainImages)
+        {
+            imageViewCreateInfo.image = image;
+            m_swapChainImageViews.emplace_back(m_device, imageViewCreateInfo);
+        }
+    }
+
+    void CreateGraphicsPipeline()
+    {
+        vk::raii::ShaderModule shaderModule = CreateShaderModule(ReadFile("../Resources/Shaders/bin/slang.spv"));
+
+        vk::PipelineShaderStageCreateInfo vertShaderStageCreateInfo
+        {
+            .stage = vk::ShaderStageFlagBits::eVertex,
+            .module = shaderModule,
+            .pName = "vertMain", // entrypoint name
+        };
+
+        vk::PipelineShaderStageCreateInfo fragShaderStageCreateInfo
+        {
+            .stage = vk::ShaderStageFlagBits::eFragment,
+            .module = shaderModule,
+            .pName = "fragMain"
+        };
+
+        vk::PipelineShaderStageCreateInfo shaderStage[] = {vertShaderStageCreateInfo, fragShaderStageCreateInfo};
+        vk::PipelineVertexInputStateCreateInfo vertexInputInfo; // infos about the vertices: bindings, format...
+        vk::PipelineInputAssemblyStateCreateInfo inputAssemblyStateCreateInfo
+        {
+            .topology = vk::PrimitiveTopology::eTriangleList,
+        };
+
+        std::vector<vk::DynamicState> dynamicStates
+        {
+            vk::DynamicState::eViewport,
+            vk::DynamicState::eScissor
+        };
+
+        vk::PipelineDynamicStateCreateInfo dynamicState
+        {
+            .dynamicStateCount = static_cast<uint32_t>(dynamicStates.size()),
+            .pDynamicStates = dynamicStates.data()
+        };
+
+        // since viewport/scissor are dynamic, we do not need to pass pointers to this struct
+        vk::PipelineViewportStateCreateInfo viewportState
+        {
+            .viewportCount = 1,
+            .scissorCount = 1,
+        };
+
+        vk::PipelineRasterizationStateCreateInfo rasterizationStateInfo
+        {
+            .depthClampEnable = vk::False,
+            .rasterizerDiscardEnable = vk::False,
+            .polygonMode = vk::PolygonMode::eFill,
+            .cullMode = vk::CullModeFlagBits::eBack,
+            .frontFace = vk::FrontFace::eCounterClockwise,
+            .depthBiasEnable = vk::False,
+            .depthBiasSlopeFactor = 1.f,
+            .lineWidth = 1.f
+        };
+
+        vk::PipelineMultisampleStateCreateInfo multisampleStateCreateInfo
+        {
+            .rasterizationSamples = vk::SampleCountFlagBits::e1,
+            .sampleShadingEnable = vk::False,
+        };
+
+        vk::PipelineColorBlendAttachmentState colorBlendAttachment
+        {
+            .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG | vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
+            .blendEnable = vk::False,
+        };
+
+        vk::PipelineColorBlendStateCreateInfo colorBlending
+        {
+            .logicOpEnable = vk::False,
+            .logicOp = vk::LogicOp::eCopy,
+            .attachmentCount = 1,
+            .pAttachments = &colorBlendAttachment
+        };
+
+        vk::PipelineLayoutCreateInfo pipelineLayoutCreateInfo
+        {
+            .setLayoutCount = 0,
+            .pushConstantRangeCount = 0
+        };
+        m_pipelineLayout = vk::raii::PipelineLayout(m_device, pipelineLayoutCreateInfo);
+
+        vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo
+        {
+            .colorAttachmentCount = 1,
+            .pColorAttachmentFormats = &m_swapChainImageFormat,
+        };
+
+        vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo
+        {
+            .pNext = &pipelineRenderingCreateInfo,
+            .stageCount = 2,
+            .pStages = shaderStage,
+            .pVertexInputState = &vertexInputInfo,
+            .pInputAssemblyState = &inputAssemblyStateCreateInfo,
+            .pViewportState = &viewportState,
+            .pRasterizationState = &rasterizationStateInfo,
+            .pMultisampleState = &multisampleStateCreateInfo,
+            .pColorBlendState = &colorBlending,
+            .layout = m_pipelineLayout,
+            .pDynamicState = &dynamicState,
+            .renderPass = nullptr, // no render passes, we're using Dynamic rendering from Vk 1.3
+
+            // infos for pipeline derivation. This is useless as long as we do not set the flag below
+            //.flags = VK_PIPELINE_CREATE_DERIVATIVE_BIT,
+            .basePipelineHandle = VK_NULL_HANDLE,
+            .basePipelineIndex = -1
+        };
+
+        m_pipeline = vk::raii::Pipeline(m_device, nullptr, graphicsPipelineCreateInfo);
+    }
+
+    [[nodiscard]] vk::raii::ShaderModule CreateShaderModule(const std::vector<char>& shaderSource) const
+    {
+        vk::ShaderModuleCreateInfo shaderModuleCreateInfo
+        {
+            .codeSize = shaderSource.size() * sizeof(char),
+            .pCode = reinterpret_cast<const uint32_t*>(shaderSource.data())
+        };
+
+        return {m_device, shaderModuleCreateInfo};
+    }
     #pragma endregion Methods
 
     #pragma region Lifecycle
@@ -401,6 +571,8 @@ private:
         PickPhysicalDevice();
         CreateLogicalDevice();
         CreateSwapChain();
+        CreateImageViews();
+        CreateGraphicsPipeline();
     }
 
     void MainLoop()
