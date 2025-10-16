@@ -15,6 +15,7 @@
 #pragma region Constants
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
+constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 const std::vector<const char*> validationLayers
         {
@@ -69,11 +70,14 @@ private:
     vk::raii::Pipeline m_pipeline {nullptr};
 
     vk::raii::CommandPool m_commandPool {nullptr};
-    vk::raii::CommandBuffer m_commandBuffer {nullptr};
+    std::vector<vk::raii::CommandBuffer> m_commandBuffers {};
 
-    vk::raii::Semaphore m_presentCompleteSemaphore {nullptr};
-    vk::raii::Semaphore m_renderFinishedSemaphore {nullptr};
-    vk::raii::Fence m_frameFence {nullptr};
+    std::vector<vk::raii::Semaphore> m_presentCompleteSemaphores {};
+    std::vector<vk::raii::Semaphore> m_renderFinishedSemaphores {};
+    std::vector<vk::raii::Fence> m_frameFences {};
+
+    uint32_t m_currentFrame {0};
+    uint32_t m_semaphoreIndex {0};
     #pragma endregion Members
 
     #pragma region Methods
@@ -571,21 +575,21 @@ private:
         m_commandPool = vk::raii::CommandPool(m_device, commandPoolCreateInfo);
     }
 
-    void CreateCommandBuffer()
+    void CreateCommandBuffers()
     {
         vk::CommandBufferAllocateInfo commandBufferAllocateInfo
         {
             .commandPool = m_commandPool,
             .level = vk::CommandBufferLevel::ePrimary,
-            .commandBufferCount = 1,
+            .commandBufferCount = MAX_FRAMES_IN_FLIGHT,
         };
 
-        m_commandBuffer = std::move(vk::raii::CommandBuffers(m_device, commandBufferAllocateInfo).front());
+        m_commandBuffers = vk::raii::CommandBuffers(m_device, commandBufferAllocateInfo);
     }
 
     void RecordCommandBuffer(uint32_t swapChainImageIndex)
     {
-        m_commandBuffer.begin({}); // we can pass flags here, see vk::CommandBufferUsageFlagBits
+        m_commandBuffers[m_currentFrame].begin({}); // we can pass flags here, see vk::CommandBufferUsageFlagBits
 
         TransitionImageLayout(
             swapChainImageIndex,
@@ -615,14 +619,14 @@ private:
             .pColorAttachments = &attachmentInfos
         };
 
-        m_commandBuffer.beginRendering(renderingInfo);
+        m_commandBuffers[m_currentFrame].beginRendering(renderingInfo);
 
-        m_commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
-        m_commandBuffer.setViewport(0, vk::Viewport(.0f, .0f, static_cast<float>(m_swapChainExtent.width), static_cast<float>(m_swapChainExtent.height), .0f, 1.f));
-        m_commandBuffer.setScissor(0, vk::Rect2D({0, 0}, m_swapChainExtent));
+        m_commandBuffers[m_currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
+        m_commandBuffers[m_currentFrame].setViewport(0, vk::Viewport(.0f, .0f, static_cast<float>(m_swapChainExtent.width), static_cast<float>(m_swapChainExtent.height), .0f, 1.f));
+        m_commandBuffers[m_currentFrame].setScissor(0, vk::Rect2D({0, 0}, m_swapChainExtent));
 
-        m_commandBuffer.draw(3, 1, 0, 0);
-        m_commandBuffer.endRendering();
+        m_commandBuffers[m_currentFrame].draw(3, 1, 0, 0);
+        m_commandBuffers[m_currentFrame].endRendering();
 
         // After rendering, transition the swapchain image to PRESENT_SRC
         TransitionImageLayout(
@@ -634,7 +638,7 @@ private:
             vk::PipelineStageFlagBits2::eColorAttachmentOutput,        // srcStage
             vk::PipelineStageFlagBits2::eBottomOfPipe                  // dstStage
         );
-        m_commandBuffer.end();
+        m_commandBuffers[m_currentFrame].end();
     }
 
     void TransitionImageLayout(
@@ -670,52 +674,63 @@ private:
             .imageMemoryBarrierCount = 1,
             .pImageMemoryBarriers = &barrier
         };
-        m_commandBuffer.pipelineBarrier2(dependencyInfo);
+        m_commandBuffers[m_currentFrame].pipelineBarrier2(dependencyInfo);
     }
 
     void CreateSyncObjects()
     {
-        m_presentCompleteSemaphore = vk::raii::Semaphore(m_device, vk::SemaphoreCreateInfo());
-        m_renderFinishedSemaphore = vk::raii::Semaphore(m_device, vk::SemaphoreCreateInfo());
-        m_frameFence = vk::raii::Fence(m_device, {.flags = vk::FenceCreateFlagBits::eSignaled});
+        m_presentCompleteSemaphores.clear();
+        m_renderFinishedSemaphores.clear();
+        m_frameFences.clear();
+
+        for (int i = 0; i < m_swapChainImages.size(); i++)
+        {
+            m_presentCompleteSemaphores.emplace_back(m_device, vk::SemaphoreCreateInfo());
+            m_renderFinishedSemaphores.emplace_back(m_device, vk::SemaphoreCreateInfo());
+        }
+
+        for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
+        {
+            m_frameFences.emplace_back(m_device, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
+        }
     }
 
     void DrawFrame()
     {
-        m_graphicsQueue.waitIdle();
+        // wait for the frame to be finished before doing anything else, we don't want to begin asking for more swapchain
+        // images while rendering is still ongoing
+        while (m_device.waitForFences(*m_frameFences[m_currentFrame], vk::True, std::numeric_limits<uint64_t>::max()) == vk::Result::eTimeout)
+        {
+        }
 
         auto [result, imageIndex] = m_swapChain.acquireNextImage(
             std::numeric_limits<uint64_t>::max(),
-            *m_presentCompleteSemaphore,
+            *m_presentCompleteSemaphores[m_semaphoreIndex],
             nullptr
         );
+
+        m_device.resetFences(*m_frameFences[m_currentFrame]);
+        m_commandBuffers[m_currentFrame].reset();
         RecordCommandBuffer(imageIndex);
 
-        m_device.resetFences(*m_frameFence);
         vk::PipelineStageFlags waitDestinationStageFlags(vk::PipelineStageFlagBits::eColorAttachmentOutput);
         const vk::SubmitInfo submitInfo
         {
             .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &*m_presentCompleteSemaphore,
+            .pWaitSemaphores = &*m_presentCompleteSemaphores[m_semaphoreIndex],
             .pWaitDstStageMask = &waitDestinationStageFlags,
             .commandBufferCount = 1,
-            .pCommandBuffers = &*m_commandBuffer,
+            .pCommandBuffers = &*m_commandBuffers[m_currentFrame],
             .signalSemaphoreCount = 1,
-            .pSignalSemaphores = &*m_renderFinishedSemaphore
+            .pSignalSemaphores = &*m_renderFinishedSemaphores[imageIndex]
         };
 
-        m_graphicsQueue.submit(submitInfo, *m_frameFence);
-        // wait for the frame to be finished before doing anything else, we don't want to begin asking for more swapchain
-        // images while rendering is still ongoing
-        while (m_device.waitForFences(*m_frameFence, vk::True, 1.f) == vk::Result::eTimeout)
-        {
-
-        }
+        m_graphicsQueue.submit(submitInfo, *m_frameFences[m_currentFrame]);
 
         const vk::PresentInfoKHR presentInfo
         {
             .waitSemaphoreCount = 1,
-            .pWaitSemaphores = &*m_renderFinishedSemaphore,
+            .pWaitSemaphores = &*m_renderFinishedSemaphores[imageIndex],
             .swapchainCount = 1,
             .pSwapchains = &*m_swapChain,
             .pImageIndices = &imageIndex
@@ -728,6 +743,9 @@ private:
             default:
                 break;
         }
+
+        m_semaphoreIndex = (m_semaphoreIndex + 1) % m_swapChainImages.size();
+        m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
     #pragma endregion Methods
 
@@ -753,7 +771,7 @@ private:
         CreateImageViews();
         CreateGraphicsPipeline();
         CreateCommandPool();
-        CreateCommandBuffer();
+        CreateCommandBuffers();
         CreateSyncObjects();
     }
 
