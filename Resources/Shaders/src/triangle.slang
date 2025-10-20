@@ -1,16 +1,8 @@
-static float2 positions[3] = float2[]
-(
-    float2(0.5, 0.5),
-    float2(0.0, -0.5),
-    float2(-0.5, 0.5)
-);
-
-static float3 colors[3] = float3[]
-(
-    float3(.0f, 1.f, .0f),
-    float3(1.f, .0f, .0f),
-    float3(.0f, .0f, 1.f)
-);
+struct VSInput
+{
+    float2 inPosition;
+    float3 inColor;
+};
 
 struct VertexOutput
 {
@@ -19,11 +11,11 @@ struct VertexOutput
 };
 
 [shader("vertex")]
-VertexOutput vertMain(uint vid : SV_VertexID)
+VertexOutput vertMain(VSInput input)
 {
     VertexOutput output;
-    output.sv_position = float4(positions[vid], .0f, 1.f);
-    output.color = colors[vid];
+    output.sv_position = float4(input.inPosition, .0f, 1.f);
+    output.color = input.inColor;
     return output;
 }
 

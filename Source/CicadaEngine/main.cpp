@@ -12,6 +12,10 @@
 #include <fstream>
 #include <map>
 
+#include <glm/glm.hpp>
+
+#include "Buffer.h"
+
 #pragma region Constants
 constexpr uint32_t WIDTH = 800;
 constexpr uint32_t HEIGHT = 600;
@@ -36,6 +40,8 @@ constexpr bool enableValidationLayers = true;
 #endif
 
 #pragma endregion Constants
+
+
 
 class HelloTriangleApplication
 {
@@ -78,6 +84,16 @@ private:
 
     uint32_t m_currentFrame {0};
     uint32_t m_semaphoreIndex {0};
+    bool m_framebufferResized {true};
+
+    const std::vector<Vertex> vertices = {
+        {{0.0f, -0.5f}, {1.0f, 0.0f, 0.0f}},
+        {{0.5f, 0.5f}, {0.0f, 1.0f, 0.0f}},
+        {{-0.5f, 0.5f}, {0.0f, 0.0f, 1.0f}}
+    };
+
+    //triangle buffer
+    Buffer m_triangleBuffer;
     #pragma endregion Members
 
     #pragma region Methods
@@ -105,6 +121,12 @@ private:
 
         file.close();
         return buffer;
+    }
+
+    static void FramebufferSizeCallback(GLFWwindow* window, int width, int height)
+    {
+        auto context = reinterpret_cast<HelloTriangleApplication*>(glfwGetWindowUserPointer(window));
+        context->m_framebufferResized = true;
     }
     #pragma endregion Statics
 
@@ -459,7 +481,16 @@ private:
         };
 
         vk::PipelineShaderStageCreateInfo shaderStage[] = {vertShaderStageCreateInfo, fragShaderStageCreateInfo};
-        vk::PipelineVertexInputStateCreateInfo vertexInputInfo; // infos about the vertices: bindings, format...
+
+        vk::VertexInputBindingDescription vertexBindingDescription = Vertex::GetBindingDescription();
+        std::array<vk::VertexInputAttributeDescription, 2> vertexAttributeDescriptions = Vertex::GetAttributeDescriptions();
+        vk::PipelineVertexInputStateCreateInfo vertexInputInfo
+        {
+            .vertexBindingDescriptionCount = 1,
+            .pVertexBindingDescriptions = &vertexBindingDescription,
+            .vertexAttributeDescriptionCount = vertexAttributeDescriptions.size(),
+            .pVertexAttributeDescriptions = vertexAttributeDescriptions.data(),
+        };
         vk::PipelineInputAssemblyStateCreateInfo inputAssemblyStateCreateInfo
         {
             .topology = vk::PrimitiveTopology::eTriangleList,
@@ -490,7 +521,7 @@ private:
             .rasterizerDiscardEnable = vk::False,
             .polygonMode = vk::PolygonMode::eFill,
             .cullMode = vk::CullModeFlagBits::eBack,
-            .frontFace = vk::FrontFace::eCounterClockwise,
+            .frontFace = vk::FrontFace::eClockwise,
             .depthBiasEnable = vk::False,
             .depthBiasSlopeFactor = 1.f,
             .lineWidth = 1.f
@@ -625,6 +656,8 @@ private:
         m_commandBuffers[m_currentFrame].setViewport(0, vk::Viewport(.0f, .0f, static_cast<float>(m_swapChainExtent.width), static_cast<float>(m_swapChainExtent.height), .0f, 1.f));
         m_commandBuffers[m_currentFrame].setScissor(0, vk::Rect2D({0, 0}, m_swapChainExtent));
 
+        m_commandBuffers[m_currentFrame].bindVertexBuffers(0, *m_triangleBuffer.Handle(), {0});
+
         m_commandBuffers[m_currentFrame].draw(3, 1, 0, 0);
         m_commandBuffers[m_currentFrame].endRendering();
 
@@ -703,11 +736,20 @@ private:
         {
         }
 
-        auto [result, imageIndex] = m_swapChain.acquireNextImage(
+        auto [result, imageIndex] = SwapchainNextImageWrapper(
+            m_swapChain,
             std::numeric_limits<uint64_t>::max(),
             *m_presentCompleteSemaphores[m_semaphoreIndex],
             nullptr
         );
+
+        if (result == vk::Result::eErrorOutOfDateKHR)
+        {
+            RecreateSwapChain();
+            return;
+        }
+        if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
+            throw std::runtime_error("couldn't acquire swap chain image!");
 
         m_device.resetFences(*m_frameFences[m_currentFrame]);
         m_commandBuffers[m_currentFrame].reset();
@@ -736,16 +778,72 @@ private:
             .pImageIndices = &imageIndex
         };
 
-        switch (m_graphicsQueue.presentKHR(presentInfo))
+        result = QueuePresentWrapper(m_graphicsQueue, presentInfo);
+        //result = m_graphicsQueue.presentKHR(presentInfo);
+        if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR || m_framebufferResized)
         {
-            case vk::Result::eSuccess:
-                break;
-            default:
-                break;
+            RecreateSwapChain();
+            m_framebufferResized = false;
         }
+        else if (result != vk::Result::eSuccess)
+            throw std::runtime_error("Couldn't present swap chain image");
 
         m_semaphoreIndex = (m_semaphoreIndex + 1) % m_swapChainImages.size();
         m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
+    }
+
+    void RecreateSwapChain()
+    {
+        // Handle window minimizing: the swapchain created will have a size of 0, so we wait until we receive a valid
+        // size
+        int width = 0, height = 0;
+        glfwGetFramebufferSize(m_window, &width, &height);
+        while (width == 0 || height == 0)
+        {
+            glfwGetFramebufferSize(m_window, &width, &height);
+            glfwWaitEvents();
+        }
+
+        // we should try changing the swapchain creation to pass the old swapchain as input in the createinfo, then delete the old one.
+        m_device.waitIdle();
+
+        CleanupSwapChain();
+
+        CreateSwapChain();
+        CreateImageViews();
+    }
+
+    void CleanupSwapChain()
+    {
+        m_swapChainImageViews.clear();
+        m_swapChain = nullptr;
+    }
+
+    /**
+     * @brief vk::raii::SwapchainKHR::acquireNextImageKHR without exceptions
+     */
+    std::pair<vk::Result, uint32_t> SwapchainNextImageWrapper(const vk::raii::SwapchainKHR &swapchain,
+                                                              uint64_t timeout, vk::Semaphore semaphore,
+                                                              vk::Fence fence) {
+        uint32_t image_index;
+        vk::Result result = static_cast<vk::Result>(swapchain.getDispatcher()->vkAcquireNextImageKHR(
+            static_cast<VkDevice>(swapchain.getDevice()), static_cast<VkSwapchainKHR>(*swapchain),
+            timeout, static_cast<VkSemaphore>(semaphore), static_cast<VkFence>(fence), &image_index));
+        return std::make_pair(result, image_index);
+    }
+
+    /**
+     * @brief vk::raii::Queue::presentKHR without exceptions
+     */
+    vk::Result QueuePresentWrapper(const vk::raii::Queue &queue,
+                                   const vk::PresentInfoKHR &present_info) {
+        return static_cast<vk::Result>(queue.getDispatcher()->vkQueuePresentKHR(
+            static_cast<VkQueue>(*queue), reinterpret_cast<const VkPresentInfoKHR *>(&present_info)));
+    }
+
+    void CreateVertexBuffer()
+    {
+        m_triangleBuffer = Buffer(m_device, m_physicalDevice, vertices);
     }
     #pragma endregion Methods
 
@@ -755,9 +853,11 @@ private:
         glfwInit();
 
         glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
 
         m_window = glfwCreateWindow(WIDTH, HEIGHT, "Cicada", nullptr, nullptr);
+        glfwSetWindowUserPointer(m_window, this);
+        glfwSetFramebufferSizeCallback(m_window, FramebufferSizeCallback);
     }
 
     void InitVulkan()
@@ -771,6 +871,7 @@ private:
         CreateImageViews();
         CreateGraphicsPipeline();
         CreateCommandPool();
+        CreateVertexBuffer();
         CreateCommandBuffers();
         CreateSyncObjects();
     }
