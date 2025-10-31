@@ -66,7 +66,9 @@ private:
     vk::raii::Device m_device {nullptr};
     vk::raii::Queue m_graphicsQueue {nullptr};
     vk::raii::Queue m_presentQueue {nullptr};
-    int m_graphicsQueueIndex {-1};
+    vk::raii::Queue m_transferQueue {nullptr};
+    uint32_t m_graphicsQueueIndex {-1u};
+    uint32_t m_transferQueueIndex {-1u};
     vk::raii::SwapchainKHR m_swapChain {nullptr};
     std::vector<vk::Image> m_swapChainImages;
     vk::Format m_swapChainImageFormat{vk::Format::eUndefined};
@@ -76,6 +78,7 @@ private:
     vk::raii::Pipeline m_pipeline {nullptr};
 
     vk::raii::CommandPool m_commandPool {nullptr};
+    vk::raii::CommandPool m_transferCommandPool {nullptr};
     std::vector<vk::raii::CommandBuffer> m_commandBuffers {};
 
     std::vector<vk::raii::Semaphore> m_presentCompleteSemaphores {};
@@ -324,6 +327,14 @@ private:
             .pQueuePriorities = &queuePriority,
         };
 
+        uint32_t transferIndex = FindTransferOnlyQueue(queueFamilyProperties);
+        vk::DeviceQueueCreateInfo transferQueueCreateInfo
+        {
+            .queueFamilyIndex = transferIndex,
+            .queueCount = 1,
+            .pQueuePriorities = &queuePriority,
+        };
+
         vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain =
         {
             {},                               // no feature from physicalDeviceFeature2
@@ -331,20 +342,29 @@ private:
             { .extendedDynamicState = true, } // enable extendedDynamicState from extension
         };
 
+        std::vector<vk::DeviceQueueCreateInfo> queueCreateInfos =
+        {
+            queueCreateInfo,
+            transferQueueCreateInfo
+        };
+
         vk::DeviceCreateInfo deviceCreateInfo =
         {
             .pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
-            .queueCreateInfoCount =  1,
-            .pQueueCreateInfos = &queueCreateInfo,
+            .queueCreateInfoCount =  2,
+            .pQueueCreateInfos = queueCreateInfos.data(),
             .enabledExtensionCount = static_cast<uint32_t>(mandatoryDeviceExtensions.size()),
             .ppEnabledExtensionNames = mandatoryDeviceExtensions.data()
         };
 
         m_device = vk::raii::Device(m_physicalDevice, deviceCreateInfo);
 
+        // just for info, queueIndex is the index of the queue inside the group of queues that match the queue family index
         m_graphicsQueue = vk::raii::Queue(m_device, graphicsIndex, 0);
         m_presentQueue = vk::raii::Queue(m_device, graphicsIndex, 0);
+        m_transferQueue = vk::raii::Queue(m_device, transferIndex, 0);
         m_graphicsQueueIndex = graphicsIndex;
+        m_transferQueueIndex = transferIndex;
     }
 
     void CreateSurface()
@@ -603,7 +623,14 @@ private:
             .queueFamilyIndex = static_cast<uint32_t>(m_graphicsQueueIndex),
         };
 
+        vk::CommandPoolCreateInfo transferCommandPoolCreateInfo
+        {
+            .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
+            .queueFamilyIndex = static_cast<uint32_t>(m_transferQueueIndex),
+        };
+
         m_commandPool = vk::raii::CommandPool(m_device, commandPoolCreateInfo);
+        m_transferCommandPool = vk::raii::CommandPool(m_device, transferCommandPoolCreateInfo);
     }
 
     void CreateCommandBuffers()
@@ -843,7 +870,31 @@ private:
 
     void CreateVertexBuffer()
     {
-        m_triangleBuffer = Buffer(m_device, m_physicalDevice, vertices);
+        m_triangleBuffer = Buffer(m_device, m_physicalDevice, vertices, {m_graphicsQueueIndex, m_transferQueueIndex});
+    }
+
+    int FindTransferOnlyQueue(const std::vector<vk::QueueFamilyProperties>& queueFamilies)
+    {
+        // TODO a better way to find specialized queues like that would be to find the queue that has the desired flag, with
+        // the lowest flag value as possible (with as few bits as possible).
+        uint32_t transferIndex = -1;
+        for (int i = 0; i < queueFamilies.size(); i++)
+        {
+            if (queueFamilies[i].queueFlags & vk::QueueFlagBits::eTransfer &&
+                (queueFamilies[i].queueFlags & vk::QueueFlagBits::eGraphics) == static_cast<vk::QueueFlagBits>(0) &&
+                (queueFamilies[i].queueFlags & vk::QueueFlagBits::eCompute) == static_cast<vk::QueueFlagBits>(0)
+                )
+            {
+                transferIndex = i;
+                break;
+            }
+        }
+        if (transferIndex == -1)
+        {
+            throw std::runtime_error("Couldn't find a queue for transfer only.");
+        }
+
+        return transferIndex;
     }
     #pragma endregion Methods
 

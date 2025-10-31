@@ -29,13 +29,14 @@ struct Vertex
     }
 };
 
+// TODO refactor this to use templates?
 class Buffer {
 private:
     vk::raii::Buffer m_buffer {nullptr};
     vk::raii::DeviceMemory m_bufferMemory {nullptr};
 public:
     Buffer() = default;
-    Buffer(const vk::raii::Device& device, const vk::raii::PhysicalDevice& physicalDevice, const std::vector<Vertex>& vertices);
+    Buffer(const vk::raii::Device& device, const vk::raii::PhysicalDevice& physicalDevice, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& sharedQueueFamilies);
 
     static uint32_t FindBufferMemoryType(const vk::raii::PhysicalDevice& physicalDevice, const vk::MemoryRequirements& memoryRequirements);
 

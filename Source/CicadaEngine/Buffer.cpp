@@ -4,14 +4,16 @@
 
 #include "Buffer.h"
 
-Buffer::Buffer(const vk::raii::Device& device, const vk::raii::PhysicalDevice& physicalDevice, const std::vector<Vertex>& vertices)
+Buffer::Buffer(const vk::raii::Device& device, const vk::raii::PhysicalDevice& physicalDevice, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& sharedQueueFamilies)
 {
     vk::BufferCreateInfo bufferInfo
     {
         .flags = {},
         .size = sizeof(vertices[0]) * vertices.size(),
         .usage = vk::BufferUsageFlagBits::eVertexBuffer,
-        .sharingMode = vk::SharingMode::eExclusive
+        .sharingMode = vk::SharingMode::eConcurrent,
+        .queueFamilyIndexCount = static_cast<uint32_t>(sharedQueueFamilies.size()),
+        .pQueueFamilyIndices = sharedQueueFamilies.data(),
     };
 
     m_buffer = vk::raii::Buffer(device, bufferInfo);
