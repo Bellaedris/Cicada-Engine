@@ -29,16 +29,41 @@ struct Vertex
     }
 };
 
-// TODO refactor this to use templates?
+//TODO template this so we can init a buffer with just a size_t param, then map with an actual buffer that we can type check
 class Buffer {
+#pragma region Enums
+public:
+    enum BufferUsage
+    {
+        cVertex = 1 << 0,
+        cIndex = 1 << 1,
+    };
+#pragma endregion Enums
+
 private:
+    vk::raii::Device* m_parentDevice;
+
+    vk::raii::Buffer m_stagingBuffer {nullptr};
     vk::raii::Buffer m_buffer {nullptr};
+    vk::raii::DeviceMemory m_stagingBufferMemory {nullptr};
     vk::raii::DeviceMemory m_bufferMemory {nullptr};
+    vk::DeviceSize m_bufferSize {};
 public:
     Buffer() = default;
-    Buffer(const vk::raii::Device& device, const vk::raii::PhysicalDevice& physicalDevice, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& sharedQueueFamilies);
+    Buffer(vk::raii::Device* device, const vk::raii::PhysicalDevice& physicalDevice, vk::DeviceSize size, const std::vector<uint32_t>& sharedQueueFamilies);
 
-    static uint32_t FindBufferMemoryType(const vk::raii::PhysicalDevice& physicalDevice, const vk::MemoryRequirements& memoryRequirements);
-
+    void Map(const std::vector<Vertex>& vertices, const vk::raii::CommandPool &commandPool, const vk::raii::Queue &queue);
     vk::raii::Buffer& Handle() { return m_buffer; };
+
+    static uint32_t FindBufferMemoryType(const vk::raii::PhysicalDevice& physicalDevice, const vk::MemoryRequirements& memoryRequirements, vk::
+                                         MemoryPropertyFlags properties);
+    static void CopyBuffer(
+        const vk::raii::Buffer& src,
+        const vk::raii::Buffer& dst,
+        vk::DeviceSize size,
+        const vk::raii::CommandPool& commandPool,
+        vk
+        ::raii::Device *device,
+        vk::raii::Queue queue
+    );
 };

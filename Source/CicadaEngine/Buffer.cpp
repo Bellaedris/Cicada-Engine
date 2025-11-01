@@ -4,38 +4,72 @@
 
 #include "Buffer.h"
 
-Buffer::Buffer(const vk::raii::Device& device, const vk::raii::PhysicalDevice& physicalDevice, const std::vector<Vertex>& vertices, const std::vector<uint32_t>& sharedQueueFamilies)
+Buffer::Buffer(vk::raii::Device* device, const vk::raii::PhysicalDevice& physicalDevice, const vk::DeviceSize size, const std::vector<uint32_t>& sharedQueueFamilies)
+    : m_parentDevice(device)
 {
-    vk::BufferCreateInfo bufferInfo
+    m_bufferSize = size;
+
+    // staging buffer
+    vk::BufferCreateInfo stagingInfo
     {
         .flags = {},
-        .size = sizeof(vertices[0]) * vertices.size(),
-        .usage = vk::BufferUsageFlagBits::eVertexBuffer,
+        .size = m_bufferSize,
+        .usage = vk::BufferUsageFlagBits::eTransferSrc,
         .sharingMode = vk::SharingMode::eConcurrent,
         .queueFamilyIndexCount = static_cast<uint32_t>(sharedQueueFamilies.size()),
         .pQueueFamilyIndices = sharedQueueFamilies.data(),
     };
 
-    m_buffer = vk::raii::Buffer(device, bufferInfo);
+    m_stagingBuffer = vk::raii::Buffer(*m_parentDevice, stagingInfo);
+    vk::MemoryRequirements memoryRequirementsStaging = m_stagingBuffer.getMemoryRequirements();
+
+    vk::MemoryAllocateInfo memoryAllocateInfoStaging
+    {
+        .allocationSize = memoryRequirementsStaging.size,
+        .memoryTypeIndex = FindBufferMemoryType(physicalDevice, memoryRequirementsStaging, vk::MemoryPropertyFlagBits::eHostCoherent | vk::MemoryPropertyFlagBits::eHostVisible)
+    };
+
+    m_stagingBufferMemory = vk::raii::DeviceMemory(*m_parentDevice, memoryAllocateInfoStaging);
+    m_stagingBuffer.bindMemory(*m_stagingBufferMemory, 0);
+
+    // actual buffer
+    vk::BufferCreateInfo bufferInfo
+    {
+        .flags = {},
+        .size = m_bufferSize,
+        .usage = vk::BufferUsageFlagBits::eVertexBuffer | vk::BufferUsageFlagBits::eTransferDst,
+        .sharingMode = vk::SharingMode::eConcurrent,
+        .queueFamilyIndexCount = static_cast<uint32_t>(sharedQueueFamilies.size()),
+        .pQueueFamilyIndices = sharedQueueFamilies.data(),
+    };
+
+    m_buffer = vk::raii::Buffer(*m_parentDevice, bufferInfo);
     vk::MemoryRequirements memoryRequirements = m_buffer.getMemoryRequirements();
 
     vk::MemoryAllocateInfo memoryAllocateInfo
     {
         .allocationSize = memoryRequirements.size,
-        .memoryTypeIndex = FindBufferMemoryType(physicalDevice, memoryRequirements)
+        .memoryTypeIndex = FindBufferMemoryType(physicalDevice, memoryRequirements, vk::MemoryPropertyFlagBits::eDeviceLocal)
     };
 
-    m_bufferMemory = vk::raii::DeviceMemory(device, memoryAllocateInfo);
+    m_bufferMemory = vk::raii::DeviceMemory(*m_parentDevice, memoryAllocateInfo);
     m_buffer.bindMemory(*m_bufferMemory, 0);
-
-    void* data = m_bufferMemory.mapMemory(0, bufferInfo.size);
-    memcpy(data, vertices.data(), bufferInfo.size);
-    m_bufferMemory.unmapMemory();
 }
 
-uint32_t Buffer::FindBufferMemoryType(const vk::raii::PhysicalDevice &physicalDevice, const vk::MemoryRequirements& memoryRequirements)
+void Buffer::Map(const std::vector<Vertex> &vertices, const vk::raii::CommandPool &commandPool, const vk::raii::Queue &queue)
 {
-    vk::MemoryPropertyFlags properties = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
+    void* dataStaging = m_stagingBufferMemory.mapMemory(0, m_bufferSize);
+    memcpy(dataStaging, vertices.data(), m_bufferSize);
+    m_stagingBufferMemory.unmapMemory();
+
+    CopyBuffer(m_stagingBuffer, m_buffer, m_bufferSize, commandPool, m_parentDevice, queue);
+}
+
+uint32_t Buffer::FindBufferMemoryType(
+    const vk::raii::PhysicalDevice &physicalDevice,
+    const vk::MemoryRequirements& memoryRequirements,
+    vk::MemoryPropertyFlags properties)
+{
     vk::PhysicalDeviceMemoryProperties memoryProperties = physicalDevice.getMemoryProperties();
 
     for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
@@ -43,5 +77,32 @@ uint32_t Buffer::FindBufferMemoryType(const vk::raii::PhysicalDevice &physicalDe
             return i;
     }
 
-    throw std::runtime_error("couldn't find suitable memory type!");
+    throw std::runtime_error("couldn't find suitable memory to allocate buffer");
+}
+
+void Buffer::CopyBuffer(
+    const vk::raii::Buffer &src,
+    const vk::raii::Buffer &dst,
+    vk::DeviceSize size,
+    const vk::raii::CommandPool& commandPool,
+    vk::raii::Device *device,
+    vk::raii::Queue queue
+)
+{
+    vk::CommandBufferAllocateInfo allocateInfo
+    {
+        .commandPool = commandPool,
+        .level = vk::CommandBufferLevel::ePrimary,
+        .commandBufferCount = 1,
+    };
+
+    vk::raii::CommandBuffer commandBuffer = std::move(device->allocateCommandBuffers(allocateInfo).front());
+
+    commandBuffer.begin(vk::CommandBufferBeginInfo{.flags = vk::CommandBufferUsageFlagBits::eOneTimeSubmit});
+    commandBuffer.copyBuffer(src, dst, vk::BufferCopy(0, 0, size));
+    commandBuffer.end();
+
+    // TODO this is horrible, the buffer shouldn't be allowed to submit a queue. Find out who should be aware of the queue
+    queue.submit(vk::SubmitInfo{.commandBufferCount = 1, .pCommandBuffers = &*commandBuffer}, nullptr);
+    queue.waitIdle();
 }

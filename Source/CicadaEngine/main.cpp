@@ -870,7 +870,8 @@ private:
 
     void CreateVertexBuffer()
     {
-        m_triangleBuffer = Buffer(m_device, m_physicalDevice, vertices, {m_graphicsQueueIndex, m_transferQueueIndex});
+        m_triangleBuffer = Buffer(&m_device, m_physicalDevice, sizeof(vertices[0]) * vertices.size(), {m_graphicsQueueIndex, m_transferQueueIndex});
+        m_triangleBuffer.Map(vertices, m_transferCommandPool, m_transferQueue);
     }
 
     int FindTransferOnlyQueue(const std::vector<vk::QueueFamilyProperties>& queueFamilies)
