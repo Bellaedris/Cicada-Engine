@@ -1,7 +1,16 @@
 cmake_minimum_required(VERSION 4.0) # CMake version
 project(Cicada_Engine)  # Project Name
 set(CMAKE_CXX_STANDARD 20)  # C++ Version
-add_executable(${PROJECT_NAME} main.cpp)    # Executable build upon main.cpp
+add_executable(${PROJECT_NAME} main.cpp
+        src/cicaInstance.cpp
+        src/cicaInstance.h
+        src/cicaDebugMessenger.cpp
+        src/cicaDebugMessenger.h
+        src/cicaCore_Minimal.h
+        src/CicadaEngine.cpp
+        src/CicadaEngine.h
+        src/cicaPhysicalDevice.cpp
+        src/cicaPhysicalDevice.h)    # Executable build upon main.cpp
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/CMake")    # Add to the search path CMake directory (root of the project)
 find_package(Vulkan REQUIRED)  # Required package
