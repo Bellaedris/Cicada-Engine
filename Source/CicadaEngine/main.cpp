@@ -15,6 +15,8 @@
 #include <glm/glm.hpp>
 
 #include "Buffer.h"
+#include "GPU/Renderer.h"
+#include "GPU/Surface"
 
 #pragma region Constants
 constexpr uint32_t WIDTH = 800;
@@ -22,9 +24,9 @@ constexpr uint32_t HEIGHT = 600;
 constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 
 const std::vector<const char*> validationLayers
-        {
-            "VK_LAYER_KHRONOS_validation",
-        };
+{
+    "VK_LAYER_KHRONOS_validation",
+};
 
 const std::vector<const char*> mandatoryDeviceExtensions = {
     vk::KHRSwapchainExtensionName,
@@ -58,10 +60,7 @@ private:
     #pragma region Members
     GLFWwindow* m_window;
 
-    vk::raii::Context m_context; // the context is automatically created by the raii constructor
-    vk::raii::Instance m_instance {nullptr};
-    vk::raii::DebugUtilsMessengerEXT m_debugMessenger {nullptr};
-    vk::raii::SurfaceKHR m_surface {nullptr};
+    std::unique_ptr<cica::gpu::Renderer> m_renderer {nullptr};
     vk::raii::PhysicalDevice m_physicalDevice {nullptr};
     vk::raii::Device m_device {nullptr};
     vk::raii::Queue m_graphicsQueue {nullptr};
@@ -101,16 +100,6 @@ private:
 
     #pragma region Methods
     #pragma region Statics
-    static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(
-            vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
-            vk::DebugUtilsMessageTypeFlagsEXT type,
-            const vk::DebugUtilsMessengerCallbackDataEXT* pCallbackData, void*)
-    {
-        std::cerr << "validation layer: type " << to_string(type) << " msg: " << pCallbackData->pMessage << std::endl;
-
-        return vk::False;
-    }
-
     static std::vector<char> ReadFile(const std::string& fileName)
     {
         std::ifstream file(fileName, std::ios::binary | std::ios::ate);
@@ -133,103 +122,9 @@ private:
     }
     #pragma endregion Statics
 
-    void SetupDebugMessenger()
-    {
-        if(!enableValidationLayers)
-            return;
-
-        vk::DebugUtilsMessageSeverityFlagsEXT  severityFlags(vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
-            vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
-            vk::DebugUtilsMessageSeverityFlagBitsEXT::eError
-        );
-
-        vk::DebugUtilsMessageTypeFlagsEXT messageTypeFlags(vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
-            vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
-            vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance
-        );
-
-        vk::DebugUtilsMessengerCreateInfoEXT debugUtilsMessengerCreateInfoEXT
-        {
-            .messageSeverity = severityFlags,
-            .messageType = messageTypeFlags,
-            .pfnUserCallback = &DebugCallback
-            //.pUserData = could be used to pass a pointer to arbitrary data, for instance our renderer class, or something
-        };
-
-        m_debugMessenger = m_instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoEXT);
-    }
-
-    void CreateInstance()
-    {
-        constexpr vk::ApplicationInfo appInfo {
-            .pApplicationName = "Cicada Engine",
-            .applicationVersion = VK_MAKE_VERSION(0, 0, 1),
-            .pEngineName = "No Engine",
-            .engineVersion = VK_MAKE_VERSION(0, 0, 1),
-            .apiVersion = vk::ApiVersion14
-        };
-
-        std::vector<const char*> requiredExtensions = GetRequiredExtensions();
-        uint32_t extensionsCount = requiredExtensions.size();
-
-        // retrieve the available extensions and ensure we have the ones required by glfw
-        std::vector<vk::ExtensionProperties> extensionProperties =  m_context.enumerateInstanceExtensionProperties();
-        for(uint32_t i = 0; i < extensionsCount; i++)
-        {
-            if(std::ranges::none_of(extensionProperties,
-                                    [glfwExtension = requiredExtensions[i]](auto const& extensionProperty)
-                                    { return strcmp(glfwExtension, extensionProperty.extensionName) == 0; }))
-            {
-                throw std::runtime_error("Required GLFW extension not supported: " + std::string(requiredExtensions[i]));
-            }
-        }
-
-        // retrieve the available layers and ensure it includes the validation layers we need
-        std::vector<const char*> requiredLayers;
-        if(enableValidationLayers)
-        {
-            requiredLayers.assign(validationLayers.begin(), validationLayers.end());
-        }
-
-        std::vector<vk::LayerProperties> layerProperties = m_context.enumerateInstanceLayerProperties();
-        for(const char* layer : requiredLayers)
-        {
-            if(std::ranges::none_of(layerProperties,
-                                    [requiredLayer = layer](auto const& layerProperty)
-                                    { return std::strcmp(requiredLayer, layerProperty.layerName) == 0; }))
-            {
-                throw std::runtime_error("Required layer " + std::string(layer) + "not supported");
-            }
-        }
-
-        vk::InstanceCreateInfo createInfo {
-            .pApplicationInfo = &appInfo,
-            .enabledLayerCount = static_cast<uint32_t>(requiredLayers.size()),
-            .ppEnabledLayerNames = requiredLayers.data(),
-            .enabledExtensionCount = extensionsCount,
-            .ppEnabledExtensionNames = requiredExtensions.data(),
-        };
-
-        m_instance = vk::raii::Instance(m_context, createInfo);
-    }
-
-    std::vector<const char*> GetRequiredExtensions()
-    {
-        uint32_t glfwExtensionCount = 0;
-        const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
-
-        std::vector extensions(glfwExtensions, glfwExtensions + glfwExtensionCount);
-        if(enableValidationLayers)
-        {
-            extensions.push_back(vk::EXTDebugUtilsExtensionName);
-        }
-
-        return extensions;
-    }
-
     void PickPhysicalDevice()
     {
-        std::vector<vk::raii::PhysicalDevice> devices = m_instance.enumeratePhysicalDevices();
+        std::vector<vk::raii::PhysicalDevice> devices = m_renderer->Instance().enumeratePhysicalDevices();
 
         if (devices.empty())
             throw std::runtime_error("Couldn't find a GPU with Vulkan support.");
@@ -308,7 +203,7 @@ private:
         uint32_t graphicsIndex = -1;
         for (int i = 0; i < queueFamilyProperties.size(); i++)
         {
-            if ((queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eGraphics) && m_physicalDevice.getSurfaceSupportKHR(i, m_surface))
+            if ((queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eGraphics) && m_physicalDevice.getSurfaceSupportKHR(i, m_renderer->Surface()))
             {
                 graphicsIndex = i;
                 break;
@@ -367,16 +262,6 @@ private:
         m_transferQueueIndex = transferIndex;
     }
 
-    void CreateSurface()
-    {
-        VkSurfaceKHR surface;
-        if (glfwCreateWindowSurface(*m_instance, m_window, nullptr, &surface) != 0)
-        {
-            throw std::runtime_error("Couldn't create window surface.");
-        }
-        m_surface = vk::raii::SurfaceKHR(m_instance, surface);
-    }
-
     vk::SurfaceFormatKHR ChooseSwapSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& availableFormats)
     {
         for (const auto& availableFormat : availableFormats)
@@ -422,8 +307,8 @@ private:
 
     void CreateSwapChain()
     {
-        vk::SurfaceCapabilitiesKHR surfaceCapabilities = m_physicalDevice.getSurfaceCapabilitiesKHR(m_surface);
-        vk::SurfaceFormatKHR surfaceFormat = ChooseSwapSurfaceFormat(m_physicalDevice.getSurfaceFormatsKHR(m_surface));
+        vk::SurfaceCapabilitiesKHR surfaceCapabilities = m_physicalDevice.getSurfaceCapabilitiesKHR(m_renderer->Surface());
+        vk::SurfaceFormatKHR surfaceFormat = ChooseSwapSurfaceFormat(m_physicalDevice.getSurfaceFormatsKHR(m_renderer->Surface()));
         vk::Extent2D extent = ChooseSwapExtent(surfaceCapabilities);
         unsigned int swapChainImageCount = std::max(3u, surfaceCapabilities.minImageCount);
         // maxImageCount == 0 means that there is no upper limit
@@ -432,7 +317,7 @@ private:
         vk::SwapchainCreateInfoKHR swapchainCreateInfo
         {
             .flags = vk::SwapchainCreateFlagsKHR(),
-            .surface = m_surface,
+            .surface = m_renderer->Surface(),
             .minImageCount = swapChainImageCount,
             .imageFormat = surfaceFormat.format,
             .imageColorSpace = surfaceFormat.colorSpace,
@@ -914,9 +799,7 @@ private:
 
     void InitVulkan()
     {
-        CreateInstance();
-        SetupDebugMessenger();
-        CreateSurface();
+        m_renderer = std::make_unique<cica::gpu::Renderer>(true, "HelloTriangle");
         PickPhysicalDevice();
         CreateLogicalDevice();
         CreateSwapChain();

@@ -97,4 +97,4 @@ endfunction()
 add_slang_shader_target(Shaders SOURCES ${SHADER_SOURCES})
 add_dependencies(CicadaEngine Shaders)
 
-target_link_libraries(CicadaEngine glfw)
+target_link_libraries(CicadaEngine glfw Vulkan::Vulkan)
