@@ -14,12 +14,12 @@ cicaInstance::cicaInstance() {
 #endif // NDEBUG
 
     // Create the vk::instance
-    createInstance();
+    CreateInstance();
 }
 
 //==============================================================================================================================================================
 //==============================================================================================================================================================
-void cicaInstance::createInstance() {
+void cicaInstance::CreateInstance() {
     constexpr vk::ApplicationInfo appInfo = { .pApplicationName   = "Editor Window",
                                               .applicationVersion = VK_MAKE_VERSION( 1, 0, 0 ),
                                               .pEngineName        = "Cicada Engine",
@@ -42,7 +42,7 @@ void cicaInstance::createInstance() {
         throw std::runtime_error( "One or more required layers are not supported!" );
     }
 
-    const std::vector<char const *> requiredExtensions = getRequiredExtensions(); // GLFW extensions are now included in requiredExtensions
+    const std::vector<char const *> requiredExtensions = GetRequiredExtensions(); // GLFW extensions are now included in requiredExtensions
 
     // Check if the required extensions are supported by the Vulkan implementation.
     std::vector<vk::ExtensionProperties> extensionProperties = context.enumerateInstanceExtensionProperties();
@@ -81,7 +81,7 @@ void cicaInstance::createInstance() {
 // Return a required list of extensions based on whether validation layers are enabled or not
 // GLFW Extensions are required anyway but those are depending of Debug / Release mod
 //==============================================================================================================================================================
-std::vector<const char *> cicaInstance::getRequiredExtensions() const {
+std::vector<const char *> cicaInstance::GetRequiredExtensions() const {
     uint32_t     glfwExtensionCount = 0;
     const char **glfwExtensions     = glfwGetRequiredInstanceExtensions( &glfwExtensionCount );
 

@@ -6,7 +6,6 @@
 
 class cicaDebugMessenger {
   public:
-    cicaDebugMessenger();
     cicaDebugMessenger( const cicaInstance &_cicaInst );
 
   private:

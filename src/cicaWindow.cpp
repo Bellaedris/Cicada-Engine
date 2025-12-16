@@ -1,35 +1,33 @@
-#include "CicadaEngine.h"
+#include "cicaWindow.h"
 
 //==========================================================================================================================================================
 //==========================================================================================================================================================
-void CicadaEngine::run() {
-    m_cicaWindow = std::make_unique<cicaWindow>();
-    initVulkan();
-    mainLoop();
-    cleanup();
+cicaWindow::cicaWindow() { initWindow(); }
+
+//==========================================================================================================================================================
+//==========================================================================================================================================================
+void cicaWindow::initWindow() {
+    glfwInit();                                     // Init API
+    glfwWindowHint( GLFW_CLIENT_API, GLFW_NO_API ); // Disable OpenGL Context
+    glfwWindowHint( GLFW_RESIZABLE, GLFW_FALSE );   // Disable Resize
+    m_window = glfwCreateWindow( WIDTH, HEIGHT, "Cicada-Engine", nullptr, nullptr );
 }
 
 //==========================================================================================================================================================
 //==========================================================================================================================================================
-void CicadaEngine::initVulkan() {
-    m_cicaInstance       = std::make_unique<cicaInstance>();
-    m_cicaDebugMessenger = std::make_unique<cicaDebugMessenger>( *m_cicaInstance ); // Software Version Verification
-    m_cicaWindow->createSurface( *m_cicaInstance ); // Create a window surface
-    m_cicaPhysicalDevice = std::make_unique<cicaPhysicalDevice>( *m_cicaInstance );                     // Hardware Version Verification
-    m_cicaLogicalDevice  = std::make_unique<cicaLogicalDevice>( *m_cicaPhysicalDevice, *m_cicaWindow ); // Features available on our Physical Devices
-}
-
-//==========================================================================================================================================================
-//==========================================================================================================================================================
-void CicadaEngine::mainLoop() {
-    while ( !glfwWindowShouldClose( m_cicaWindow->GrabWindow() ) ) {
-        glfwPollEvents();
+void cicaWindow::createSurface( const cicaInstance &_cicaInstance ) {
+    VkSurfaceKHR _surface;
+    if ( glfwCreateWindowSurface( *_cicaInstance.GetInstance(), m_window, nullptr, &_surface ) != 0 ) {
+        throw std::runtime_error( "failed to create window surface!" );
     }
+    m_surface = vk::raii::SurfaceKHR( _cicaInstance.GetInstance(), _surface );
 }
 
 //==========================================================================================================================================================
 //==========================================================================================================================================================
-void CicadaEngine::cleanup() {
-    glfwDestroyWindow( m_cicaWindow->GrabWindow() );
-    glfwTerminate();
+GLFWwindow *cicaWindow::GrabWindow() const {
+    if ( m_window == nullptr ) {
+        assert( "You are returning a cicaWindow::m_window that is nullptr" ); // To replace with an std::exception
+    }
+    return m_window;
 }

@@ -2,10 +2,6 @@
 
 //==========================================================================================================================================================
 //==========================================================================================================================================================
-cicaPhysicalDevice::cicaPhysicalDevice() {}
-
-//==========================================================================================================================================================
-//==========================================================================================================================================================
 cicaPhysicalDevice::cicaPhysicalDevice( const cicaInstance &_cicaInst ) { PickPhysicalDevice( _cicaInst ); }
 
 //==========================================================================================================================================================
@@ -13,7 +9,8 @@ cicaPhysicalDevice::cicaPhysicalDevice( const cicaInstance &_cicaInst ) { PickPh
 void cicaPhysicalDevice::PickPhysicalDevice( const cicaInstance &_cicaInst ) {
     const std::vector<vk::raii::PhysicalDevice> devices = _cicaInst.GetInstance().enumeratePhysicalDevices(); // Like the extension enumeration
 
-#ifndef NDEBUG                                                 // This ...
+#ifndef NDEBUG
+    std::cout << "Physical devices available:" << std::endl;
     for ( const vk::raii::PhysicalDevice &device : devices ) { // Could create a scoring method based on properties / features of each Physical devices
         std::cout << '\t' << device.getProperties().deviceName << '\n';
     }

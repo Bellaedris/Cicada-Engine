@@ -6,15 +6,14 @@
 
 class cicaPhysicalDevice {
   public:
-    cicaPhysicalDevice();
     cicaPhysicalDevice( const cicaInstance &_cicaInst );
 
-  private:
-    //==========================================================================================================================================================
-    //==========================================================================================================================================================
+    vk::raii::PhysicalDevice GetPhysicalDevice() const { return m_physicalDevice; }
+
     std::vector<const char *> deviceExtensions = { vk::KHRSwapchainExtensionName, vk::KHRSpirv14ExtensionName, vk::KHRSynchronization2ExtensionName,
                                                    vk::KHRCreateRenderpass2ExtensionName };
 
+  private:
     void PickPhysicalDevice( const cicaInstance &_cicaInst );
 
     vk::raii::PhysicalDevice m_physicalDevice = nullptr; // Store the graphic card we use

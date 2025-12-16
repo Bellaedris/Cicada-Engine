@@ -7,13 +7,13 @@ class cicaInstance {
   public:
     cicaInstance();
 
-    const bool               &GetValidationLayers() const { return enableValidationLayers; }
-    const vk::raii::Instance &GetInstance() const { return instance; }
+    [[nodiscard]] const bool               &GetValidationLayers() const { return enableValidationLayers; }
+    [[nodiscard]] const vk::raii::Instance &GetInstance() const { return instance; }
 
     const cicaInstance &operator=( const cicaInstance &_arg ) const { return _arg; } // Required for clang ???
   private:
-    void                      createInstance();
-    std::vector<const char *> getRequiredExtensions() const;
+    void                                    CreateInstance();
+    [[nodiscard]] std::vector<const char *> GetRequiredExtensions() const;
 
     const std::vector<char const *> validationLayers = { "VK_LAYER_KHRONOS_validation" };
     vk::raii::Context               context;

@@ -10,7 +10,11 @@ add_executable(${PROJECT_NAME} main.cpp
         src/CicadaEngine.cpp
         src/CicadaEngine.h
         src/cicaPhysicalDevice.cpp
-        src/cicaPhysicalDevice.h)    # Executable build upon main.cpp
+        src/cicaPhysicalDevice.h
+        src/cicaLogicalDevice.cpp
+        src/cicaLogicalDevice.h
+        src/cicaWindow.cpp
+        src/cicaWindow.h)    # Executable build upon main.cpp
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_LIST_DIR}/CMake")    # Add to the search path CMake directory (root of the project)
 find_package(Vulkan REQUIRED)  # Required package

@@ -3,43 +3,32 @@
 
 #include "cicaCore_Minimal.h"
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
-
 #include "cicaDebugMessenger.h"
 #include "cicaInstance.h"
+#include "cicaLogicalDevice.h"
 #include "cicaPhysicalDevice.h"
+#include "cicaWindow.h"
 
 class CicadaEngine {
   public:
-    CicadaEngine();
+    CicadaEngine() {};
     ~CicadaEngine() = default;
 
     void run();
 
   private:
-    void initWindow();
     void initVulkan();
     void mainLoop();
     void cleanup();
 
-    //==========================================================================================================================================================
-    //==========================================================================================================================================================
-    uint32_t findQueueFamilies( vk::raii::PhysicalDevice physicalDevice ) {
-        // find the index of the first queue family that supports graphics
-        std::vector<vk::QueueFamilyProperties> queueFamilyProperties = physicalDevice.getQueueFamilyProperties();
+    // Init Window Section
+    std::unique_ptr<cicaWindow> m_cicaWindow;
 
-        // get the first index into queueFamilyProperties which supports graphics
-        auto graphicsQueueFamilyProperty = std::find_if( queueFamilyProperties.begin(), queueFamilyProperties.end(),
-                                                         []( vk::QueueFamilyProperties const &qfp ) { return qfp.queueFlags & vk::QueueFlagBits::eGraphics; } );
-
-        return static_cast<uint32_t>( std::distance( queueFamilyProperties.begin(), graphicsQueueFamilyProperty ) );
-    }
-
-    GLFWwindow        *m_window = nullptr;   // GLFW Window
-    cicaInstance       m_cicaInstance;       // TODO change to pointer
-    cicaDebugMessenger m_cicaDebugMessenger; // TODO change to pointer
-    cicaPhysicalDevice m_cicaPhysicalDevice; // TODO change to pointer
+    // Init Vulkan Section
+    std::unique_ptr<cicaInstance>       m_cicaInstance;
+    std::unique_ptr<cicaDebugMessenger> m_cicaDebugMessenger;
+    std::unique_ptr<cicaPhysicalDevice> m_cicaPhysicalDevice;
+    std::unique_ptr<cicaLogicalDevice>  m_cicaLogicalDevice;
 };
 
 #endif // !CICADA_ENGINE_CICADAENGINE_H
