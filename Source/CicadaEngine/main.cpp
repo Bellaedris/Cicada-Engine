@@ -14,9 +14,9 @@
 
 #include <glm/glm.hpp>
 
-#include "Buffer.h"
+#include "GPU/Buffer.h"
 #include "GPU/Renderer.h"
-#include "GPU/Surface"
+#include "GPU/Surface.h"
 
 #pragma region Constants
 constexpr uint32_t WIDTH = 800;
@@ -26,13 +26,6 @@ constexpr uint32_t MAX_FRAMES_IN_FLIGHT = 2;
 const std::vector<const char*> validationLayers
 {
     "VK_LAYER_KHRONOS_validation",
-};
-
-const std::vector<const char*> mandatoryDeviceExtensions = {
-    vk::KHRSwapchainExtensionName,
-    vk::KHRSpirv14ExtensionName,
-    vk::KHRSynchronization2ExtensionName,
-    vk::KHRCreateRenderpass2ExtensionName
 };
 
 #ifdef NDEBUG
@@ -50,7 +43,6 @@ class HelloTriangleApplication
 public:
     void run()
     {
-        InitWindow();
         InitVulkan();
         MainLoop();
         Cleanup();
@@ -58,21 +50,7 @@ public:
 
 private:
     #pragma region Members
-    GLFWwindow* m_window;
-
     std::unique_ptr<cica::gpu::Renderer> m_renderer {nullptr};
-    vk::raii::PhysicalDevice m_physicalDevice {nullptr};
-    vk::raii::Device m_device {nullptr};
-    vk::raii::Queue m_graphicsQueue {nullptr};
-    vk::raii::Queue m_presentQueue {nullptr};
-    vk::raii::Queue m_transferQueue {nullptr};
-    uint32_t m_graphicsQueueIndex {-1u};
-    uint32_t m_transferQueueIndex {-1u};
-    vk::raii::SwapchainKHR m_swapChain {nullptr};
-    std::vector<vk::Image> m_swapChainImages;
-    vk::Format m_swapChainImageFormat{vk::Format::eUndefined};
-    vk::Extent2D m_swapChainExtent;
-    std::vector<vk::raii::ImageView> m_swapChainImageViews;
     vk::raii::PipelineLayout m_pipelineLayout {nullptr};
     vk::raii::Pipeline m_pipeline {nullptr};
 
@@ -95,7 +73,7 @@ private:
     };
 
     //triangle buffer
-    Buffer m_triangleBuffer;
+    std::unique_ptr<cica::gpu::Buffer> m_triangleBuffer;
     #pragma endregion Members
 
     #pragma region Methods
@@ -121,251 +99,6 @@ private:
         context->m_framebufferResized = true;
     }
     #pragma endregion Statics
-
-    void PickPhysicalDevice()
-    {
-        std::vector<vk::raii::PhysicalDevice> devices = m_renderer->Instance().enumeratePhysicalDevices();
-
-        if (devices.empty())
-            throw std::runtime_error("Couldn't find a GPU with Vulkan support.");
-
-        std::multimap<int, vk::raii::PhysicalDevice> devicesScores;
-        for (const auto& device : devices)
-        {
-            // we want our devices to handle graphics queue families, a few mandatory extensions and
-            // maximize a score
-            std::vector<vk::QueueFamilyProperties> queueFamilies = device.getQueueFamilyProperties();
-
-            bool hasMinimalCapabilities = true;
-            // check that we handle graphics queues
-            const auto queueFamilyPropertiesIter = std::ranges::find_if(queueFamilies, [](vk::QueueFamilyProperties const &qfp)
-            {
-                return (qfp.queueFlags & vk::QueueFlagBits::eGraphics) != static_cast<vk::QueueFlags>(0);
-            });
-            if (queueFamilyPropertiesIter == queueFamilies.end())
-            {
-                hasMinimalCapabilities = false;
-            }
-
-            // check that we handle mandatory graphics extensions
-            std::vector<vk::ExtensionProperties> extensionProperties = device.enumerateDeviceExtensionProperties();
-            bool hasAllExtensions = true;
-            for (const auto& extension : mandatoryDeviceExtensions)
-            {
-                auto foundProperty = std::ranges::find_if(extensionProperties, [extension](auto const & ext)
-                {
-                   return strcmp(ext.extensionName, extension) == 0;
-                });
-                hasAllExtensions = hasAllExtensions && foundProperty != extensionProperties.end();
-            }
-            if (!hasAllExtensions)
-            {
-                hasMinimalCapabilities = false;
-            }
-
-            if (!hasMinimalCapabilities)
-            {
-                devicesScores.insert({0, device});
-                continue;
-            }
-
-            // compute a device score
-            vk::PhysicalDeviceProperties properties = device.getProperties();
-            vk::PhysicalDeviceFeatures features = device.getFeatures();
-
-            uint32_t score = 0;
-            if (properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu)
-            {
-                score += 1000;
-            }
-
-            score += properties.limits.maxImageDimension2D;
-            devicesScores.insert({score, device});
-        }
-
-        if (devicesScores.rbegin()->first > 0)
-        {
-            m_physicalDevice = vk::raii::PhysicalDevice(devicesScores.rbegin()->second);
-            std::cout << "selected device: " << m_physicalDevice.getProperties().deviceName << std::endl;
-        }
-        else
-            throw std::runtime_error("Couldn't find a suitable device");
-    }
-
-    void CreateLogicalDevice()
-    {
-        std::vector<vk::QueueFamilyProperties> queueFamilyProperties = m_physicalDevice.getQueueFamilyProperties();
-
-        // TODO eventually refactor this to allow for selection of a present-only queue if no queue supports both graphics/present
-        // overall try to separate the errors to pinpoint where the issue arose (graphics or present?)
-
-        // get the first index into queueFamilyProperties which supports graphics
-        uint32_t graphicsIndex = -1;
-        for (int i = 0; i < queueFamilyProperties.size(); i++)
-        {
-            if ((queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eGraphics) && m_physicalDevice.getSurfaceSupportKHR(i, m_renderer->Surface()))
-            {
-                graphicsIndex = i;
-                break;
-            }
-        }
-        if (graphicsIndex == -1)
-        {
-            throw std::runtime_error("Couldn't find a queue for graphics and present.");
-        }
-
-        float queuePriority = 0.f;
-        vk::DeviceQueueCreateInfo queueCreateInfo =
-        {
-            .queueFamilyIndex = graphicsIndex,
-            .queueCount = 1,
-            .pQueuePriorities = &queuePriority,
-        };
-
-        uint32_t transferIndex = FindTransferOnlyQueue(queueFamilyProperties);
-        vk::DeviceQueueCreateInfo transferQueueCreateInfo
-        {
-            .queueFamilyIndex = transferIndex,
-            .queueCount = 1,
-            .pQueuePriorities = &queuePriority,
-        };
-
-        vk::StructureChain<vk::PhysicalDeviceFeatures2, vk::PhysicalDeviceVulkan13Features, vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT> featureChain =
-        {
-            {},                               // no feature from physicalDeviceFeature2
-            { .synchronization2 = true, .dynamicRendering = true },     // enable Vulkan13 dynamic rendering
-            { .extendedDynamicState = true, } // enable extendedDynamicState from extension
-        };
-
-        std::vector<vk::DeviceQueueCreateInfo> queueCreateInfos =
-        {
-            queueCreateInfo,
-            transferQueueCreateInfo
-        };
-
-        vk::DeviceCreateInfo deviceCreateInfo =
-        {
-            .pNext = &featureChain.get<vk::PhysicalDeviceFeatures2>(),
-            .queueCreateInfoCount =  2,
-            .pQueueCreateInfos = queueCreateInfos.data(),
-            .enabledExtensionCount = static_cast<uint32_t>(mandatoryDeviceExtensions.size()),
-            .ppEnabledExtensionNames = mandatoryDeviceExtensions.data()
-        };
-
-        m_device = vk::raii::Device(m_physicalDevice, deviceCreateInfo);
-
-        // just for info, queueIndex is the index of the queue inside the group of queues that match the queue family index
-        m_graphicsQueue = vk::raii::Queue(m_device, graphicsIndex, 0);
-        m_presentQueue = vk::raii::Queue(m_device, graphicsIndex, 0);
-        m_transferQueue = vk::raii::Queue(m_device, transferIndex, 0);
-        m_graphicsQueueIndex = graphicsIndex;
-        m_transferQueueIndex = transferIndex;
-    }
-
-    vk::SurfaceFormatKHR ChooseSwapSurfaceFormat(const std::vector<vk::SurfaceFormatKHR>& availableFormats)
-    {
-        for (const auto& availableFormat : availableFormats)
-        {
-            if (availableFormat.format == vk::Format::eB8G8R8A8Srgb && availableFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
-            {
-                return availableFormat;
-            }
-        }
-
-        return availableFormats[0];
-    }
-
-    /**
-     * Returns the most suitable present mode from a list of available ones in a surface attached to a device
-     * @param availablePresentModes a list of all present modes compatible with this device/surface combination
-     * @return Mailbox if found, fifo otherwise
-     */
-    vk::PresentModeKHR ChooseSwapPresentMode(const std::vector<vk::PresentModeKHR>& availablePresentModes)
-    {
-        for (const auto& availablePresentMode : availablePresentModes)
-        {
-            if (availablePresentMode == vk::PresentModeKHR::eMailbox)
-                return availablePresentMode;
-        }
-        return vk::PresentModeKHR::eFifo;
-    }
-
-    vk::Extent2D ChooseSwapExtent(const vk::SurfaceCapabilitiesKHR& capabilities)
-    {
-        if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
-            return capabilities.currentExtent;
-
-        int width, height;
-        glfwGetFramebufferSize(m_window, &width, &height);
-
-        return
-        {
-            std::clamp<uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
-            std::clamp<uint32_t>(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)
-        };
-    }
-
-    void CreateSwapChain()
-    {
-        vk::SurfaceCapabilitiesKHR surfaceCapabilities = m_physicalDevice.getSurfaceCapabilitiesKHR(m_renderer->Surface());
-        vk::SurfaceFormatKHR surfaceFormat = ChooseSwapSurfaceFormat(m_physicalDevice.getSurfaceFormatsKHR(m_renderer->Surface()));
-        vk::Extent2D extent = ChooseSwapExtent(surfaceCapabilities);
-        unsigned int swapChainImageCount = std::max(3u, surfaceCapabilities.minImageCount);
-        // maxImageCount == 0 means that there is no upper limit
-        swapChainImageCount = surfaceCapabilities.maxImageCount == 0 ? swapChainImageCount : std::min(swapChainImageCount, surfaceCapabilities.maxImageCount);
-
-        vk::SwapchainCreateInfoKHR swapchainCreateInfo
-        {
-            .flags = vk::SwapchainCreateFlagsKHR(),
-            .surface = m_renderer->Surface(),
-            .minImageCount = swapChainImageCount,
-            .imageFormat = surfaceFormat.format,
-            .imageColorSpace = surfaceFormat.colorSpace,
-            .imageExtent = extent,
-            .imageArrayLayers = 1, // always 1 unless steroscopic 3D
-            .imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
-            .imageSharingMode = vk::SharingMode::eExclusive, // change if graphics & present queues are different (to concurrent). Alternatively, keep exclusive but we will have to move ownerships
-            .queueFamilyIndexCount = 0, // change if graphcis & present are different (change to 2)
-            .pQueueFamilyIndices = nullptr, // change to an array of the queue indices if graphics & present are different
-            .preTransform = surfaceCapabilities.currentTransform,
-            .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
-            .clipped = true,
-            .oldSwapchain = nullptr // pass the old swapchain in case of recreation, for instance when changing resolution
-        };
-
-        m_swapChainImageFormat = surfaceFormat.format;
-        m_swapChainExtent = extent;
-
-        m_swapChain = vk::raii::SwapchainKHR(m_device, swapchainCreateInfo);
-        m_swapChainImages = m_swapChain.getImages();
-    }
-
-    void CreateImageViews()
-    {
-        m_swapChainImageViews.clear();
-
-        constexpr vk::ImageSubresourceRange subresourceRange
-        {
-            .aspectMask = vk::ImageAspectFlagBits::eColor,
-            .baseMipLevel = 0,
-            .levelCount = 1,
-            .baseArrayLayer = 0,
-            .layerCount = 1,
-        };
-
-        vk::ImageViewCreateInfo imageViewCreateInfo
-        {
-            .viewType = vk::ImageViewType::e2D,
-            .format = m_swapChainImageFormat,
-            .subresourceRange = subresourceRange
-        };
-
-        for (const auto& image : m_swapChainImages)
-        {
-            imageViewCreateInfo.image = image;
-            m_swapChainImageViews.emplace_back(m_device, imageViewCreateInfo);
-        }
-    }
 
     void CreateGraphicsPipeline()
     {
@@ -457,12 +190,12 @@ private:
             .setLayoutCount = 0,
             .pushConstantRangeCount = 0
         };
-        m_pipelineLayout = vk::raii::PipelineLayout(m_device, pipelineLayoutCreateInfo);
+        m_pipelineLayout = vk::raii::PipelineLayout(m_renderer->Device(), pipelineLayoutCreateInfo);
 
         vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo
         {
             .colorAttachmentCount = 1,
-            .pColorAttachmentFormats = &m_swapChainImageFormat,
+            .pColorAttachmentFormats = &m_renderer->SwapchainImageFormat(),
         };
 
         vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo
@@ -486,7 +219,7 @@ private:
             .basePipelineIndex = -1
         };
 
-        m_pipeline = vk::raii::Pipeline(m_device, nullptr, graphicsPipelineCreateInfo);
+        m_pipeline = vk::raii::Pipeline(m_renderer->Device(), nullptr, graphicsPipelineCreateInfo);
     }
 
     [[nodiscard]] vk::raii::ShaderModule CreateShaderModule(const std::vector<char>& shaderSource) const
@@ -496,8 +229,7 @@ private:
             .codeSize = shaderSource.size() * sizeof(char),
             .pCode = reinterpret_cast<const uint32_t*>(shaderSource.data())
         };
-
-        return {m_device, shaderModuleCreateInfo};
+        return {m_renderer->Device(), shaderModuleCreateInfo};
     }
 
     void CreateCommandPool()
@@ -505,17 +237,17 @@ private:
         vk::CommandPoolCreateInfo commandPoolCreateInfo
         {
             .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-            .queueFamilyIndex = static_cast<uint32_t>(m_graphicsQueueIndex),
+            .queueFamilyIndex = static_cast<uint32_t>(m_renderer->GraphicsQueueIndex()),
         };
 
         vk::CommandPoolCreateInfo transferCommandPoolCreateInfo
         {
             .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer,
-            .queueFamilyIndex = static_cast<uint32_t>(m_transferQueueIndex),
+            .queueFamilyIndex = static_cast<uint32_t>(m_renderer->TransferQueueIndex()),
         };
 
-        m_commandPool = vk::raii::CommandPool(m_device, commandPoolCreateInfo);
-        m_transferCommandPool = vk::raii::CommandPool(m_device, transferCommandPoolCreateInfo);
+        m_commandPool = vk::raii::CommandPool(m_renderer->Device(), commandPoolCreateInfo);
+        m_transferCommandPool = vk::raii::CommandPool(m_renderer->Device(), transferCommandPoolCreateInfo);
     }
 
     void CreateCommandBuffers()
@@ -527,7 +259,7 @@ private:
             .commandBufferCount = MAX_FRAMES_IN_FLIGHT,
         };
 
-        m_commandBuffers = vk::raii::CommandBuffers(m_device, commandBufferAllocateInfo);
+        m_commandBuffers = vk::raii::CommandBuffers(m_renderer->Device(), commandBufferAllocateInfo);
     }
 
     void RecordCommandBuffer(uint32_t swapChainImageIndex)
@@ -547,7 +279,7 @@ private:
         vk::ClearValue clearColor = vk::ClearColorValue(.0f, .0f, .0f, 1.f);
         vk::RenderingAttachmentInfo attachmentInfos
         {
-            .imageView = m_swapChainImageViews[swapChainImageIndex],
+            .imageView = m_renderer->SwapchainImageViews()[swapChainImageIndex],
             .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
             .loadOp = vk::AttachmentLoadOp::eClear,
             .storeOp = vk::AttachmentStoreOp::eStore,
@@ -556,7 +288,7 @@ private:
 
         vk::RenderingInfo renderingInfo
         {
-            .renderArea = { .offset = {0, 0}, .extent = m_swapChainExtent},
+            .renderArea = { .offset = {0, 0}, .extent = m_renderer->SwapchainExtent()},
             .layerCount = 1,
             .colorAttachmentCount = 1,
             .pColorAttachments = &attachmentInfos
@@ -565,10 +297,10 @@ private:
         m_commandBuffers[m_currentFrame].beginRendering(renderingInfo);
 
         m_commandBuffers[m_currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
-        m_commandBuffers[m_currentFrame].setViewport(0, vk::Viewport(.0f, .0f, static_cast<float>(m_swapChainExtent.width), static_cast<float>(m_swapChainExtent.height), .0f, 1.f));
-        m_commandBuffers[m_currentFrame].setScissor(0, vk::Rect2D({0, 0}, m_swapChainExtent));
+        m_commandBuffers[m_currentFrame].setViewport(0, vk::Viewport(.0f, .0f, static_cast<float>(m_renderer->SwapchainExtent().width), static_cast<float>(m_renderer->SwapchainExtent().height), .0f, 1.f));
+        m_commandBuffers[m_currentFrame].setScissor(0, vk::Rect2D({0, 0}, m_renderer->SwapchainExtent()));
 
-        m_commandBuffers[m_currentFrame].bindVertexBuffers(0, *m_triangleBuffer.Handle(), {0});
+        m_commandBuffers[m_currentFrame].bindVertexBuffers(0, *m_triangleBuffer->Handle(), {0});
 
         m_commandBuffers[m_currentFrame].draw(3, 1, 0, 0);
         m_commandBuffers[m_currentFrame].endRendering();
@@ -605,7 +337,7 @@ private:
             .newLayout = newLayout,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = m_swapChainImages[imageIndex],
+            .image = m_renderer->SwapchainImages()[imageIndex],
             .subresourceRange = {
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .baseMipLevel = 0,
@@ -628,15 +360,15 @@ private:
         m_renderFinishedSemaphores.clear();
         m_frameFences.clear();
 
-        for (int i = 0; i < m_swapChainImages.size(); i++)
+        for (int i = 0; i < m_renderer->SwapchainImages().size(); i++)
         {
-            m_presentCompleteSemaphores.emplace_back(m_device, vk::SemaphoreCreateInfo());
-            m_renderFinishedSemaphores.emplace_back(m_device, vk::SemaphoreCreateInfo());
+            m_presentCompleteSemaphores.emplace_back(m_renderer->Device(), vk::SemaphoreCreateInfo());
+            m_renderFinishedSemaphores.emplace_back(m_renderer->Device(), vk::SemaphoreCreateInfo());
         }
 
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
         {
-            m_frameFences.emplace_back(m_device, vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
+            m_frameFences.emplace_back(m_renderer->Device(), vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
         }
     }
 
@@ -644,12 +376,12 @@ private:
     {
         // wait for the frame to be finished before doing anything else, we don't want to begin asking for more swapchain
         // images while rendering is still ongoing
-        while (m_device.waitForFences(*m_frameFences[m_currentFrame], vk::True, std::numeric_limits<uint64_t>::max()) == vk::Result::eTimeout)
+        while (m_renderer->Device().waitForFences(*m_frameFences[m_currentFrame], vk::True, std::numeric_limits<uint64_t>::max()) == vk::Result::eTimeout)
         {
         }
 
         auto [result, imageIndex] = SwapchainNextImageWrapper(
-            m_swapChain,
+                m_renderer->Swapchain(),
             std::numeric_limits<uint64_t>::max(),
             *m_presentCompleteSemaphores[m_semaphoreIndex],
             nullptr
@@ -663,7 +395,7 @@ private:
         if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
             throw std::runtime_error("couldn't acquire swap chain image!");
 
-        m_device.resetFences(*m_frameFences[m_currentFrame]);
+        m_renderer->Device().resetFences(*m_frameFences[m_currentFrame]);
         m_commandBuffers[m_currentFrame].reset();
         RecordCommandBuffer(imageIndex);
 
@@ -679,18 +411,18 @@ private:
             .pSignalSemaphores = &*m_renderFinishedSemaphores[imageIndex]
         };
 
-        m_graphicsQueue.submit(submitInfo, *m_frameFences[m_currentFrame]);
+        m_renderer->GraphicsQueue().submit(submitInfo, *m_frameFences[m_currentFrame]);
 
         const vk::PresentInfoKHR presentInfo
         {
             .waitSemaphoreCount = 1,
             .pWaitSemaphores = &*m_renderFinishedSemaphores[imageIndex],
             .swapchainCount = 1,
-            .pSwapchains = &*m_swapChain,
+            .pSwapchains = &*m_renderer->Swapchain(),
             .pImageIndices = &imageIndex
         };
 
-        result = QueuePresentWrapper(m_graphicsQueue, presentInfo);
+        result = QueuePresentWrapper(m_renderer->GraphicsQueue(), presentInfo);
         //result = m_graphicsQueue.presentKHR(presentInfo);
         if (result == vk::Result::eErrorOutOfDateKHR || result == vk::Result::eSuboptimalKHR || m_framebufferResized)
         {
@@ -700,7 +432,7 @@ private:
         else if (result != vk::Result::eSuccess)
             throw std::runtime_error("Couldn't present swap chain image");
 
-        m_semaphoreIndex = (m_semaphoreIndex + 1) % m_swapChainImages.size();
+        m_semaphoreIndex = (m_semaphoreIndex + 1) % m_renderer->SwapchainImages().size();
         m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
@@ -709,26 +441,20 @@ private:
         // Handle window minimizing: the swapchain created will have a size of 0, so we wait until we receive a valid
         // size
         int width = 0, height = 0;
-        glfwGetFramebufferSize(m_window, &width, &height);
+        glfwGetFramebufferSize(m_renderer->Window(), &width, &height);
         while (width == 0 || height == 0)
         {
-            glfwGetFramebufferSize(m_window, &width, &height);
+            glfwGetFramebufferSize(m_renderer->Window(), &width, &height);
             glfwWaitEvents();
         }
 
         // we should try changing the swapchain creation to pass the old swapchain as input in the createinfo, then delete the old one.
-        m_device.waitIdle();
+        m_renderer->Device().waitIdle();
 
-        CleanupSwapChain();
+        m_renderer->CleanupSwapChain();
 
-        CreateSwapChain();
-        CreateImageViews();
-    }
-
-    void CleanupSwapChain()
-    {
-        m_swapChainImageViews.clear();
-        m_swapChain = nullptr;
+        m_renderer->CreateSwapChain();
+        m_renderer->CreateImageViews();
     }
 
     /**
@@ -755,55 +481,16 @@ private:
 
     void CreateVertexBuffer()
     {
-        m_triangleBuffer = Buffer(&m_device, m_physicalDevice, sizeof(vertices[0]) * vertices.size(), {m_graphicsQueueIndex, m_transferQueueIndex});
-        m_triangleBuffer.Map(vertices, m_transferCommandPool, m_transferQueue);
-    }
-
-    int FindTransferOnlyQueue(const std::vector<vk::QueueFamilyProperties>& queueFamilies)
-    {
-        // TODO a better way to find specialized queues like that would be to find the queue that has the desired flag, with
-        // the lowest flag value as possible (with as few bits as possible).
-        uint32_t transferIndex = -1;
-        for (int i = 0; i < queueFamilies.size(); i++)
-        {
-            if (queueFamilies[i].queueFlags & vk::QueueFlagBits::eTransfer &&
-                (queueFamilies[i].queueFlags & vk::QueueFlagBits::eGraphics) == static_cast<vk::QueueFlagBits>(0) &&
-                (queueFamilies[i].queueFlags & vk::QueueFlagBits::eCompute) == static_cast<vk::QueueFlagBits>(0)
-                )
-            {
-                transferIndex = i;
-                break;
-            }
-        }
-        if (transferIndex == -1)
-        {
-            throw std::runtime_error("Couldn't find a queue for transfer only.");
-        }
-
-        return transferIndex;
+        m_triangleBuffer = m_renderer->CreateBuffer(sizeof(vertices[0]) * vertices.size(), cica::gpu::Buffer::BufferUsage::cVertex);
+        m_triangleBuffer->Map(vertices, m_transferCommandPool, m_renderer->TransferQueue());
     }
     #pragma endregion Methods
 
     #pragma region Lifecycle
-    void InitWindow()
-    {
-        glfwInit();
-
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-
-        m_window = glfwCreateWindow(WIDTH, HEIGHT, "Cicada", nullptr, nullptr);
-        glfwSetWindowUserPointer(m_window, this);
-        glfwSetFramebufferSizeCallback(m_window, FramebufferSizeCallback);
-    }
 
     void InitVulkan()
     {
         m_renderer = std::make_unique<cica::gpu::Renderer>(true, "HelloTriangle");
-        PickPhysicalDevice();
-        CreateLogicalDevice();
-        CreateSwapChain();
-        CreateImageViews();
         CreateGraphicsPipeline();
         CreateCommandPool();
         CreateVertexBuffer();
@@ -813,19 +500,19 @@ private:
 
     void MainLoop()
     {
-        while(!glfwWindowShouldClose(m_window))
+        while(!glfwWindowShouldClose(m_renderer->Window()))
         {
             glfwPollEvents();
             DrawFrame();
         }
 
         // wait for any async operation to finish
-        m_device.waitIdle();
+        m_renderer->Device().waitIdle();
     }
 
     void Cleanup()
     {
-        glfwDestroyWindow(m_window);
+        glfwDestroyWindow(m_renderer->Window());
 
         glfwTerminate();
     }
