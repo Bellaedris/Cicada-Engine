@@ -31,6 +31,8 @@ struct Vertex
 
 namespace cica::gpu
 {
+    class Device;
+
     //TODO template this so we can init a buffer with just a size_t param, then map with an actual buffer that we can type check
     class Buffer
     {
@@ -44,7 +46,7 @@ namespace cica::gpu
     #pragma endregion Enums
 
     private:
-        vk::raii::Device *m_parentDevice;
+        Device *m_parentDevice;
 
         vk::raii::Buffer m_stagingBuffer{nullptr};
         vk::raii::Buffer m_buffer{nullptr};
@@ -56,7 +58,7 @@ namespace cica::gpu
     public:
         Buffer() = default;
 
-        Buffer(vk::raii::Device *device, const vk::raii::PhysicalDevice &physicalDevice,
+        Buffer(Device* device,
                const std::vector<uint32_t> &sharedQueueFamilies, vk::DeviceSize size, BufferUsage usage);
 
         void Map(const std::vector<Vertex> &vertices, const vk::raii::CommandPool &commandPool,
@@ -73,8 +75,7 @@ namespace cica::gpu
                 const vk::raii::Buffer &dst,
                 vk::DeviceSize size,
                 const vk::raii::CommandPool &commandPool,
-                vk
-                ::raii::Device *device,
+                const vk::raii::Device *device,
                 vk::raii::Queue queue
         );
     };

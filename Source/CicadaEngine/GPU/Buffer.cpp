@@ -4,9 +4,11 @@
 
 #include "Buffer.h"
 
+#include "Device.h"
+
 namespace cica::gpu
 {
-    Buffer::Buffer(vk::raii::Device *device, const vk::raii::PhysicalDevice &physicalDevice,
+    Buffer::Buffer(Device* device,
                    const std::vector<uint32_t> &sharedQueueFamilies, vk::DeviceSize size, BufferUsage usage)
             : m_parentDevice(device)
     {
@@ -23,18 +25,18 @@ namespace cica::gpu
             .pQueueFamilyIndices = sharedQueueFamilies.data(),
         };
 
-        m_stagingBuffer = vk::raii::Buffer(*m_parentDevice, stagingInfo);
+        m_stagingBuffer = vk::raii::Buffer(m_parentDevice->Get(), stagingInfo);
         vk::MemoryRequirements memoryRequirementsStaging = m_stagingBuffer.getMemoryRequirements();
 
         vk::MemoryAllocateInfo memoryAllocateInfoStaging
         {
             .allocationSize = memoryRequirementsStaging.size,
-            .memoryTypeIndex = FindBufferMemoryType(physicalDevice, memoryRequirementsStaging,
+            .memoryTypeIndex = FindBufferMemoryType(m_parentDevice->PhysicalDevice(), memoryRequirementsStaging,
                                                     vk::MemoryPropertyFlagBits::eHostCoherent |
                                                     vk::MemoryPropertyFlagBits::eHostVisible)
         };
 
-        m_stagingBufferMemory = vk::raii::DeviceMemory(*m_parentDevice, memoryAllocateInfoStaging);
+        m_stagingBufferMemory = vk::raii::DeviceMemory(m_parentDevice->Get(), memoryAllocateInfoStaging);
         m_stagingBuffer.bindMemory(*m_stagingBufferMemory, 0);
 
         // actual buffer
@@ -48,17 +50,17 @@ namespace cica::gpu
             .pQueueFamilyIndices = sharedQueueFamilies.data(),
         };
 
-        m_buffer = vk::raii::Buffer(*m_parentDevice, bufferInfo);
+        m_buffer = vk::raii::Buffer(m_parentDevice->Get(), bufferInfo);
         vk::MemoryRequirements memoryRequirements = m_buffer.getMemoryRequirements();
 
         vk::MemoryAllocateInfo memoryAllocateInfo
                 {
                         .allocationSize = memoryRequirements.size,
-                        .memoryTypeIndex = FindBufferMemoryType(physicalDevice, memoryRequirements,
+                        .memoryTypeIndex = FindBufferMemoryType(m_parentDevice->PhysicalDevice(), memoryRequirements,
                                                                 vk::MemoryPropertyFlagBits::eDeviceLocal)
                 };
 
-        m_bufferMemory = vk::raii::DeviceMemory(*m_parentDevice, memoryAllocateInfo);
+        m_bufferMemory = vk::raii::DeviceMemory(m_parentDevice->Get(), memoryAllocateInfo);
         m_buffer.bindMemory(*m_bufferMemory, 0);
     }
 
@@ -68,7 +70,7 @@ namespace cica::gpu
         memcpy(dataStaging, vertices.data(), m_bufferSize);
         m_stagingBufferMemory.unmapMemory();
 
-        CopyBuffer(m_stagingBuffer, m_buffer, m_bufferSize, commandPool, m_parentDevice, queue);
+        CopyBuffer(m_stagingBuffer, m_buffer, m_bufferSize, commandPool, &m_parentDevice->Get(), queue);
     }
 
     uint32_t Buffer::FindBufferMemoryType(
@@ -91,7 +93,7 @@ namespace cica::gpu
             const vk::raii::Buffer &dst,
             vk::DeviceSize size,
             const vk::raii::CommandPool &commandPool,
-            vk::raii::Device *device,
+            const vk::raii::Device *device,
             vk::raii::Queue queue
     ) {
         vk::CommandBufferAllocateInfo allocateInfo

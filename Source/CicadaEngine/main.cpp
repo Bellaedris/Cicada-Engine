@@ -1,8 +1,6 @@
 #include <vulkan/vulkan.h>
 #include <vulkan/vulkan_raii.hpp>
 
-#define GLFW_INCLUDE_VULKAN
-#include <GLFW/glfw3.h>
 #include <iostream>
 #include <stdexcept>
 #include <cstdlib>
@@ -15,8 +13,9 @@
 #include <glm/glm.hpp>
 
 #include "GPU/Buffer.h"
-#include "GPU/Renderer.h"
+#include "GPU/Device.h"
 #include "GPU/Surface.h"
+#include "Window.h"
 
 #pragma region Constants
 constexpr uint32_t WIDTH = 800;
@@ -43,6 +42,7 @@ class HelloTriangleApplication
 public:
     void run()
     {
+        window = std::make_unique<cica::Window>(800, 600);
         InitVulkan();
         MainLoop();
         Cleanup();
@@ -50,7 +50,9 @@ public:
 
 private:
     #pragma region Members
-    std::unique_ptr<cica::gpu::Renderer> m_renderer {nullptr};
+    std::unique_ptr<cica::Window> window {nullptr};
+    std::unique_ptr<cica::gpu::Device> m_renderer {nullptr};
+    std::unique_ptr<cica::gpu::Surface> m_surface;
     vk::raii::PipelineLayout m_pipelineLayout {nullptr};
     vk::raii::Pipeline m_pipeline {nullptr};
 
@@ -190,12 +192,12 @@ private:
             .setLayoutCount = 0,
             .pushConstantRangeCount = 0
         };
-        m_pipelineLayout = vk::raii::PipelineLayout(m_renderer->Device(), pipelineLayoutCreateInfo);
+        m_pipelineLayout = vk::raii::PipelineLayout(m_renderer->Get(), pipelineLayoutCreateInfo);
 
         vk::PipelineRenderingCreateInfo pipelineRenderingCreateInfo
         {
             .colorAttachmentCount = 1,
-            .pColorAttachmentFormats = &m_renderer->SwapchainImageFormat(),
+            .pColorAttachmentFormats = &m_surface->SwapchainImageFormat(),
         };
 
         vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo
@@ -219,7 +221,7 @@ private:
             .basePipelineIndex = -1
         };
 
-        m_pipeline = vk::raii::Pipeline(m_renderer->Device(), nullptr, graphicsPipelineCreateInfo);
+        m_pipeline = vk::raii::Pipeline(m_renderer->Get(), nullptr, graphicsPipelineCreateInfo);
     }
 
     [[nodiscard]] vk::raii::ShaderModule CreateShaderModule(const std::vector<char>& shaderSource) const
@@ -229,7 +231,7 @@ private:
             .codeSize = shaderSource.size() * sizeof(char),
             .pCode = reinterpret_cast<const uint32_t*>(shaderSource.data())
         };
-        return {m_renderer->Device(), shaderModuleCreateInfo};
+        return {m_renderer->Get(), shaderModuleCreateInfo};
     }
 
     void CreateCommandPool()
@@ -246,8 +248,8 @@ private:
             .queueFamilyIndex = static_cast<uint32_t>(m_renderer->TransferQueueIndex()),
         };
 
-        m_commandPool = vk::raii::CommandPool(m_renderer->Device(), commandPoolCreateInfo);
-        m_transferCommandPool = vk::raii::CommandPool(m_renderer->Device(), transferCommandPoolCreateInfo);
+        m_commandPool = vk::raii::CommandPool(m_renderer->Get(), commandPoolCreateInfo);
+        m_transferCommandPool = vk::raii::CommandPool(m_renderer->Get(), transferCommandPoolCreateInfo);
     }
 
     void CreateCommandBuffers()
@@ -259,7 +261,7 @@ private:
             .commandBufferCount = MAX_FRAMES_IN_FLIGHT,
         };
 
-        m_commandBuffers = vk::raii::CommandBuffers(m_renderer->Device(), commandBufferAllocateInfo);
+        m_commandBuffers = vk::raii::CommandBuffers(m_renderer->Get(), commandBufferAllocateInfo);
     }
 
     void RecordCommandBuffer(uint32_t swapChainImageIndex)
@@ -279,7 +281,7 @@ private:
         vk::ClearValue clearColor = vk::ClearColorValue(.0f, .0f, .0f, 1.f);
         vk::RenderingAttachmentInfo attachmentInfos
         {
-            .imageView = m_renderer->SwapchainImageViews()[swapChainImageIndex],
+            .imageView = m_surface->SwapchainImageViews()[swapChainImageIndex],
             .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
             .loadOp = vk::AttachmentLoadOp::eClear,
             .storeOp = vk::AttachmentStoreOp::eStore,
@@ -288,7 +290,7 @@ private:
 
         vk::RenderingInfo renderingInfo
         {
-            .renderArea = { .offset = {0, 0}, .extent = m_renderer->SwapchainExtent()},
+            .renderArea = { .offset = {0, 0}, .extent = m_surface->SwapchainExtent()},
             .layerCount = 1,
             .colorAttachmentCount = 1,
             .pColorAttachments = &attachmentInfos
@@ -297,8 +299,8 @@ private:
         m_commandBuffers[m_currentFrame].beginRendering(renderingInfo);
 
         m_commandBuffers[m_currentFrame].bindPipeline(vk::PipelineBindPoint::eGraphics, m_pipeline);
-        m_commandBuffers[m_currentFrame].setViewport(0, vk::Viewport(.0f, .0f, static_cast<float>(m_renderer->SwapchainExtent().width), static_cast<float>(m_renderer->SwapchainExtent().height), .0f, 1.f));
-        m_commandBuffers[m_currentFrame].setScissor(0, vk::Rect2D({0, 0}, m_renderer->SwapchainExtent()));
+        m_commandBuffers[m_currentFrame].setViewport(0, vk::Viewport(.0f, .0f, static_cast<float>(m_surface->SwapchainExtent().width), static_cast<float>(m_surface->SwapchainExtent().height), .0f, 1.f));
+        m_commandBuffers[m_currentFrame].setScissor(0, vk::Rect2D({0, 0}, m_surface->SwapchainExtent()));
 
         m_commandBuffers[m_currentFrame].bindVertexBuffers(0, *m_triangleBuffer->Handle(), {0});
 
@@ -337,7 +339,7 @@ private:
             .newLayout = newLayout,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
-            .image = m_renderer->SwapchainImages()[imageIndex],
+            .image = m_surface->SwapchainImages()[imageIndex],
             .subresourceRange = {
                 .aspectMask = vk::ImageAspectFlagBits::eColor,
                 .baseMipLevel = 0,
@@ -360,15 +362,15 @@ private:
         m_renderFinishedSemaphores.clear();
         m_frameFences.clear();
 
-        for (int i = 0; i < m_renderer->SwapchainImages().size(); i++)
+        for (int i = 0; i < m_surface->SwapchainImages().size(); i++)
         {
-            m_presentCompleteSemaphores.emplace_back(m_renderer->Device(), vk::SemaphoreCreateInfo());
-            m_renderFinishedSemaphores.emplace_back(m_renderer->Device(), vk::SemaphoreCreateInfo());
+            m_presentCompleteSemaphores.emplace_back(m_renderer->Get(), vk::SemaphoreCreateInfo());
+            m_renderFinishedSemaphores.emplace_back(m_renderer->Get(), vk::SemaphoreCreateInfo());
         }
 
         for (int i = 0; i < MAX_FRAMES_IN_FLIGHT; i++)
         {
-            m_frameFences.emplace_back(m_renderer->Device(), vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
+            m_frameFences.emplace_back(m_renderer->Get(), vk::FenceCreateInfo{.flags = vk::FenceCreateFlagBits::eSignaled});
         }
     }
 
@@ -376,12 +378,12 @@ private:
     {
         // wait for the frame to be finished before doing anything else, we don't want to begin asking for more swapchain
         // images while rendering is still ongoing
-        while (m_renderer->Device().waitForFences(*m_frameFences[m_currentFrame], vk::True, std::numeric_limits<uint64_t>::max()) == vk::Result::eTimeout)
+        while (m_renderer->Get().waitForFences(*m_frameFences[m_currentFrame], vk::True, std::numeric_limits<uint64_t>::max()) == vk::Result::eTimeout)
         {
         }
 
         auto [result, imageIndex] = SwapchainNextImageWrapper(
-                m_renderer->Swapchain(),
+                m_surface->Swapchain(),
             std::numeric_limits<uint64_t>::max(),
             *m_presentCompleteSemaphores[m_semaphoreIndex],
             nullptr
@@ -395,7 +397,7 @@ private:
         if (result != vk::Result::eSuccess && result != vk::Result::eSuboptimalKHR)
             throw std::runtime_error("couldn't acquire swap chain image!");
 
-        m_renderer->Device().resetFences(*m_frameFences[m_currentFrame]);
+        m_renderer->Get().resetFences(*m_frameFences[m_currentFrame]);
         m_commandBuffers[m_currentFrame].reset();
         RecordCommandBuffer(imageIndex);
 
@@ -418,7 +420,7 @@ private:
             .waitSemaphoreCount = 1,
             .pWaitSemaphores = &*m_renderFinishedSemaphores[imageIndex],
             .swapchainCount = 1,
-            .pSwapchains = &*m_renderer->Swapchain(),
+            .pSwapchains = &*m_surface->Swapchain(),
             .pImageIndices = &imageIndex
         };
 
@@ -432,7 +434,7 @@ private:
         else if (result != vk::Result::eSuccess)
             throw std::runtime_error("Couldn't present swap chain image");
 
-        m_semaphoreIndex = (m_semaphoreIndex + 1) % m_renderer->SwapchainImages().size();
+        m_semaphoreIndex = (m_semaphoreIndex + 1) % m_surface->SwapchainImages().size();
         m_currentFrame = (m_currentFrame + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
@@ -440,21 +442,19 @@ private:
     {
         // Handle window minimizing: the swapchain created will have a size of 0, so we wait until we receive a valid
         // size
-        int width = 0, height = 0;
-        glfwGetFramebufferSize(m_renderer->Window(), &width, &height);
+        int width = window->Width();
+        int height = window->Height();
         while (width == 0 || height == 0)
         {
-            glfwGetFramebufferSize(m_renderer->Window(), &width, &height);
-            glfwWaitEvents();
+            return;
         }
 
         // we should try changing the swapchain creation to pass the old swapchain as input in the createinfo, then delete the old one.
-        m_renderer->Device().waitIdle();
+        m_renderer->Get().waitIdle();
 
-        m_renderer->CleanupSwapChain();
-
-        m_renderer->CreateSwapChain();
-        m_renderer->CreateImageViews();
+        // FIXME this is kinda hacky, since i need my surface to
+        m_surface = nullptr;
+        m_surface = std::make_unique<cica::gpu::Surface>(m_renderer.get(), window.get());
     }
 
     /**
@@ -490,7 +490,8 @@ private:
 
     void InitVulkan()
     {
-        m_renderer = std::make_unique<cica::gpu::Renderer>(true, "HelloTriangle");
+        m_renderer = std::make_unique<cica::gpu::Device>(true, "HelloTriangle");
+        m_surface = m_renderer->CreateSurface(window.get());
         CreateGraphicsPipeline();
         CreateCommandPool();
         CreateVertexBuffer();
@@ -500,21 +501,19 @@ private:
 
     void MainLoop()
     {
-        while(!glfwWindowShouldClose(m_renderer->Window()))
+        while(window->ShouldClose() == false)
         {
             glfwPollEvents();
             DrawFrame();
         }
 
         // wait for any async operation to finish
-        m_renderer->Device().waitIdle();
+        m_renderer->Get().waitIdle();
     }
 
     void Cleanup()
     {
-        glfwDestroyWindow(m_renderer->Window());
 
-        glfwTerminate();
     }
     #pragma endregion Lifecycle
 };

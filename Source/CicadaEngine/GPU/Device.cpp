@@ -2,13 +2,13 @@
 // Created by Bellaedris on 12/11/2025.
 //
 
-#include "Renderer.h"
+#include "Device.h"
 
 #include <algorithm>
 
 namespace cica::gpu
 {
-    #pragma region staticMethods
+    #pragma region static Methods
     static VKAPI_ATTR vk::Bool32 VKAPI_CALL DebugCallback(
             vk::DebugUtilsMessageSeverityFlagBitsEXT severity,
             vk::DebugUtilsMessageTypeFlagsEXT type,
@@ -18,40 +18,20 @@ namespace cica::gpu
 
         return vk::False;
     }
-
-    static void FramebufferSizeCallback(GLFWwindow* window, int width, int height)
-    {
-        auto context = reinterpret_cast<Renderer*>(glfwGetWindowUserPointer(window));
-        //context->m_framebufferResized = true;
-    }
     #pragma endregion staticMethods
 
-    Renderer::Renderer(bool useValidationLayers, const char *appName)
+    Device::Device(bool useValidationLayers, const char *appName)
         : m_enableValidationLayers(useValidationLayers)
     {
-        glfwInit();
-
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-        glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
-
-        m_window = glfwCreateWindow(m_width, m_height, "Cicada", nullptr, nullptr);
-        glfwSetWindowUserPointer(m_window, this);
-        glfwSetFramebufferSizeCallback(m_window, FramebufferSizeCallback);
-
         CreateInstance(useValidationLayers, appName);
         if(useValidationLayers)
             CreateDebugMessenger();
 
-        CreateSurface();
-
         PickPhysicalDevice();
         CreateLogicalDevice();
-
-        CreateSwapChain();
-        CreateImageViews();
     }
 
-    void Renderer::CreateInstance(bool useValidationLayers, const char* appName)
+    void Device::CreateInstance(bool useValidationLayers, const char* appName)
     {
         vk::ApplicationInfo appInfo {
                 .pApplicationName = appName,
@@ -105,7 +85,7 @@ namespace cica::gpu
         m_instance = vk::raii::Instance(m_context, createInfo);
     }
 
-    std::vector<const char *> Renderer::GetRequiredExtensions()
+    std::vector<const char *> Device::GetRequiredExtensions()
     {
         uint32_t glfwExtensionCount = 0;
         const char** glfwExtensions = glfwGetRequiredInstanceExtensions(&glfwExtensionCount);
@@ -119,17 +99,7 @@ namespace cica::gpu
         return extensions;
     }
 
-    void Renderer::CreateSurface()
-    {
-        VkSurfaceKHR surface;
-        if (glfwCreateWindowSurface(*m_instance, m_window, nullptr, &surface) != 0)
-        {
-            throw std::runtime_error("Couldn't create window surface.");
-        }
-        m_surface = vk::raii::SurfaceKHR(m_instance, surface);
-    }
-
-    void Renderer::CreateDebugMessenger()
+    void Device::CreateDebugMessenger()
     {
         vk::DebugUtilsMessageSeverityFlagsEXT  severityFlags(
             vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose |
@@ -154,7 +124,7 @@ namespace cica::gpu
         m_debugMessenger = m_instance.createDebugUtilsMessengerEXT(debugUtilsMessengerCreateInfoEXT);
     }
 
-    void Renderer::PickPhysicalDevice()
+    void Device::PickPhysicalDevice()
     {
         std::vector<vk::raii::PhysicalDevice> devices = m_instance.enumeratePhysicalDevices();
 
@@ -224,7 +194,7 @@ namespace cica::gpu
             throw std::runtime_error("Couldn't find a suitable device");
     }
 
-    void Renderer::CreateLogicalDevice()
+    void Device::CreateLogicalDevice()
     {
         std::vector<vk::QueueFamilyProperties> queueFamilyProperties = m_physicalDevice.getQueueFamilyProperties();
 
@@ -235,7 +205,7 @@ namespace cica::gpu
         uint32_t graphicsIndex = -1;
         for (int i = 0; i < queueFamilyProperties.size(); i++)
         {
-            if ((queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eGraphics) && m_physicalDevice.getSurfaceSupportKHR(i, m_surface))
+            if ((queueFamilyProperties[i].queueFlags & vk::QueueFlagBits::eGraphics) /*&& m_physicalDevice.getSurfaceSupportKHR(i, m_surface)*/)
             {
                 graphicsIndex = i;
                 break;
@@ -294,7 +264,7 @@ namespace cica::gpu
         m_transferQueueIndex = transferIndex;
     }
 
-    int Renderer::FindTransferOnlyQueue(const std::vector<vk::QueueFamilyProperties> &queueFamilies)
+    int Device::FindTransferOnlyQueue(const std::vector<vk::QueueFamilyProperties> &queueFamilies)
     {
         // TODO a better way to find specialized queues like that would be to find the queue that has the desired flag, with
         // the lowest flag value as possible (with as few bits as possible).
@@ -318,116 +288,15 @@ namespace cica::gpu
         return transferIndex;
     }
 
-    void Renderer::CreateImageViews() {
-        m_swapChainImageViews.clear();
-
-        constexpr vk::ImageSubresourceRange subresourceRange
-                {
-                        .aspectMask = vk::ImageAspectFlagBits::eColor,
-                        .baseMipLevel = 0,
-                        .levelCount = 1,
-                        .baseArrayLayer = 0,
-                        .layerCount = 1,
-                };
-
-        vk::ImageViewCreateInfo imageViewCreateInfo
-                {
-                        .viewType = vk::ImageViewType::e2D,
-                        .format = m_swapChainImageFormat,
-                        .subresourceRange = subresourceRange
-                };
-
-        for (const auto& image : m_swapChainImages)
-        {
-            imageViewCreateInfo.image = image;
-            m_swapChainImageViews.emplace_back(m_device, imageViewCreateInfo);
-        }
-    }
-
-    void Renderer::CreateSwapChain()
-    {
-        vk::SurfaceCapabilitiesKHR surfaceCapabilities = m_physicalDevice.getSurfaceCapabilitiesKHR(m_surface);
-        vk::SurfaceFormatKHR surfaceFormat = ChooseSwapSurfaceFormat(m_physicalDevice.getSurfaceFormatsKHR(m_surface));
-        vk::Extent2D extent = ChooseSwapExtent(surfaceCapabilities);
-        vk::PresentModeKHR presentMode = ChooseSwapPresentMode(m_physicalDevice.getSurfacePresentModesKHR(m_surface));
-        unsigned int swapChainImageCount = std::max(3u, surfaceCapabilities.minImageCount);
-        // maxImageCount == 0 means that there is no upper limit
-        swapChainImageCount = surfaceCapabilities.maxImageCount == 0 ? swapChainImageCount : std::min(swapChainImageCount, surfaceCapabilities.maxImageCount);
-
-        vk::SwapchainCreateInfoKHR swapchainCreateInfo
-        {
-            .flags = vk::SwapchainCreateFlagsKHR(),
-            .surface = m_surface,
-            .minImageCount = swapChainImageCount,
-            .imageFormat = surfaceFormat.format,
-            .imageColorSpace = surfaceFormat.colorSpace,
-            .imageExtent = extent,
-            .imageArrayLayers = 1, // always 1 unless steroscopic 3D
-            .imageUsage = vk::ImageUsageFlagBits::eColorAttachment,
-            .imageSharingMode = vk::SharingMode::eExclusive, // change if graphics & present queues are different (to concurrent). Alternatively, keep exclusive but we will have to move ownerships
-            .queueFamilyIndexCount = 0, // change if graphcis & present are different (change to 2)
-            .pQueueFamilyIndices = nullptr, // change to an array of the queue indices if graphics & present are different
-            .preTransform = surfaceCapabilities.currentTransform,
-            .compositeAlpha = vk::CompositeAlphaFlagBitsKHR::eOpaque,
-            .presentMode = presentMode,
-            .clipped = true,
-            .oldSwapchain = nullptr // pass the old swapchain in case of recreation, for instance when changing resolution
-        };
-
-        m_swapChainImageFormat = surfaceFormat.format;
-        m_swapChainExtent = extent;
-
-        m_swapchain = vk::raii::SwapchainKHR(m_device, swapchainCreateInfo);
-        m_swapChainImages = m_swapchain.getImages();
-    }
-
-    vk::SurfaceFormatKHR Renderer::ChooseSwapSurfaceFormat(const std::vector<vk::SurfaceFormatKHR> &availableFormats)
-    {
-        for (const auto& availableFormat : availableFormats)
-        {
-            if (availableFormat.format == vk::Format::eB8G8R8A8Srgb && availableFormat.colorSpace == vk::ColorSpaceKHR::eSrgbNonlinear)
-            {
-                return availableFormat;
-            }
-        }
-
-        return availableFormats[0];
-    }
-
-    vk::PresentModeKHR Renderer::ChooseSwapPresentMode(const std::vector<vk::PresentModeKHR> &availablePresentModes)
-    {
-        for (const auto& availablePresentMode : availablePresentModes)
-        {
-            if (availablePresentMode == vk::PresentModeKHR::eMailbox)
-                return availablePresentMode;
-        }
-        return vk::PresentModeKHR::eFifo;
-    }
-
-    vk::Extent2D Renderer::ChooseSwapExtent(const vk::SurfaceCapabilitiesKHR &capabilities)
-    {
-        if (capabilities.currentExtent.width != std::numeric_limits<uint32_t>::max())
-            return capabilities.currentExtent;
-
-        int width, height;
-        glfwGetFramebufferSize(m_window, &width, &height);
-
-        return
-                {
-                        std::clamp<uint32_t>(width, capabilities.minImageExtent.width, capabilities.maxImageExtent.width),
-                        std::clamp<uint32_t>(height, capabilities.minImageExtent.height, capabilities.maxImageExtent.height)
-                };
-    }
-
-    void Renderer::CleanupSwapChain()
-    {
-        m_swapChainImageViews.clear();
-        m_swapchain = nullptr;
-    }
-
-    std::unique_ptr<Buffer> Renderer::CreateBuffer(uint64_t size, Buffer::BufferUsage usage)
+    std::unique_ptr<Buffer> Device::CreateBuffer(uint64_t size, Buffer::BufferUsage usage)
     {
         std::vector<uint32_t> concurrentQueues = {m_graphicsQueueIndex, m_transferQueueIndex};
-        return std::make_unique<Buffer>(&m_device, m_physicalDevice, concurrentQueues, size, usage);
+        return std::make_unique<Buffer>(this, concurrentQueues, size, usage);
     }
+
+    std::unique_ptr<Surface> Device::CreateSurface(cica::Window *window)
+    {
+        return std::make_unique<Surface>(this, window);
+    }
+
 } // cica::gpu
